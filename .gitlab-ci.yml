@@ -1,0 +1,5 @@
+image: walberla/cppcheck
+
+cppcheck:
+  script:
+    - cppcheck --inconclusive --language=c++ -j 2 --error-exitcode=1 --platform=unix64 --enable=performance,portability,missingInclude .
