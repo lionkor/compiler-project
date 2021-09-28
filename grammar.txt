@@ -8,14 +8,13 @@ function_declaration:
 
 body:
     '{' statements '}'
-    '{' '}'
 
 statements:
-    statement ';'
+    empty
     statement ';' statements
 
 statement:
-    variable_declaration
+    // variable_declaration
     assignment
 
 assignment:
@@ -24,20 +23,19 @@ assignment:
 expression:
     unary_expression
     binary_expression
-    STRING_LITERAL
 
 unary_expression:
     IDENTIFIER
     NUMERIC_LITERAL
     unary_operator NUMERIC_LITERAL
     unary_operator IDENTIFIER
+    STRING_LITERAL
 
 unary_operator:
     '-'
-    '+'
 
 binary_expression:
-    unary_expression binary_operator unary_expression
+    expression binary_operator expression
 
 binary_operator:
     '+'
