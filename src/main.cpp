@@ -3,24 +3,280 @@
 #include <charconv>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <variant>
 
-const char* test_program = R"(syscall3(1, 0, "hello\n", 6);)";
+const char* test_program = R"(
+fn add(i64 a, i64 b) -> i64 c {
+    c = a + b;
+}
+
+fn main() -> i64 ret {
+    ret = add(1, 2);
+}
+)";
 
 struct Token {
     enum class Type {
+        Typename,
+        FnKeyword,
+        ArrowOperator,
         Identifier,
-        OpenParentheses,
+        OpeningParentheses,
         ClosingParentheses,
         NumericLiteral,
         StringLiteral,
         Comma,
+        Equals,
         Semicolon,
+        OpeningBrace,
+        ClosingBrace,
+        PlusOperator,
+        MinusOperator,
+        MultiplyOperator,
+        DivideOperator,
+        // special types!
+        EndOfUnit,
+        StartOfUnit,
     } type;
     std::variant<size_t, char, std::string> value;
     size_t line;
 };
+
+std::ostream& operator<<(std::ostream& os, const Token::Type& type) {
+    switch (type) {
+    case Token::Type::FnKeyword:
+        os << "keyword 'fn'";
+        break;
+    case Token::Type::ArrowOperator:
+        os << "operator '->'";
+        break;
+    case Token::Type::Typename:
+        os << "typename";
+        break;
+    case Token::Type::Equals:
+        os << "operator '='";
+        break;
+    case Token::Type::OpeningBrace:
+        os << "opening brace '{'";
+        break;
+    case Token::Type::ClosingBrace:
+        os << "closing brace '}'";
+        break;
+    case Token::Type::PlusOperator:
+        os << "operator '+'";
+        break;
+    case Token::Type::MinusOperator:
+        os << "operator '-'";
+        break;
+    case Token::Type::MultiplyOperator:
+        os << "operator '*'";
+        break;
+    case Token::Type::DivideOperator:
+        os << "operator '/'";
+        break;
+    case Token::Type::Comma:
+        os << "comma ','";
+        break;
+    case Token::Type::Identifier:
+        os << "identifier";
+        break;
+    case Token::Type::OpeningParentheses:
+        os << "opening parentheses '('";
+        break;
+    case Token::Type::ClosingParentheses:
+        os << "closing parentheses ')'";
+        break;
+    case Token::Type::NumericLiteral:
+        os << "numeric literal";
+        break;
+    case Token::Type::StringLiteral:
+        os << "string literal";
+        break;
+    case Token::Type::Semicolon:
+        os << "semicolon ';'";
+        break;
+    case Token::Type::EndOfUnit:
+        os << "end of unit";
+        break;
+    case Token::Type::StartOfUnit:
+        os << "start of unit";
+    }
+    return os;
+}
+
+std::vector<std::string> typenames = {
+    "i64",
+    "u64",
+    "bool",
+    "char",
+};
+
+namespace AST {
+
+struct Expr {
+};
+
+struct VariableDecl : public Expr {
+};
+
+struct VariableDeclList : public Expr {
+    std::vector<std::shared_ptr<VariableDecl>> variables;
+};
+
+struct Statement : public Expr {
+    std::shared_ptr<Expr> statement;
+};
+
+struct Statements : public Expr {
+    std::vector<std::shared_ptr<Statement>> statements;
+};
+
+struct Body : public Expr {
+    std::shared_ptr<Statements> statements;
+};
+
+struct FunctionDecl : public Expr {
+    std::shared_ptr<VariableDeclList> arguments;
+    std::shared_ptr<VariableDecl> result;
+    std::shared_ptr<Body> body;
+};
+
+struct Unit : public Expr {
+    std::vector<std::shared_ptr<FunctionDecl>> decls;
+};
+
+class Parser {
+public:
+    Parser(const std::vector<Token>& tokens)
+        : m_tokens(tokens) { }
+    std::shared_ptr<Unit> unit();
+    std::shared_ptr<FunctionDecl> function_decl();
+    std::shared_ptr<VariableDecl> variable_decl();
+    std::shared_ptr<VariableDeclList> variable_decl_list();
+    std::shared_ptr<Body> body();
+    std::shared_ptr<Statement> statement();
+    std::shared_ptr<Statements> statements();
+
+private:
+    bool match(std::vector<Token::Type>);
+    bool check(Token::Type);
+    void advance() { ++m_i; }
+    Token previous();
+    Token peek();
+    const Token& current() { return m_tokens[m_i]; }
+    size_t m_i { 0 };
+    std::vector<Token> m_tokens;
+};
+
+std::shared_ptr<Unit> Parser::unit() {
+    auto result = std::make_shared<Unit>();
+    std::shared_ptr<FunctionDecl> fn;
+    for (;;) {
+        fn = function_decl();
+        if (fn) {
+
+            result->decls.push_back(fn);
+        } else {
+            break;
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<FunctionDecl> Parser::function_decl() {
+    auto result = std::make_shared<FunctionDecl>();
+    if (!match({ Token::Type::FnKeyword, Token::Type::Identifier, Token::Type::OpeningParentheses })) {
+        return nullptr;
+    }
+    if (!check(Token::Type::ClosingParentheses)) {
+        // have arguments
+        result->arguments = variable_decl_list();
+        if (!result->arguments) {
+            return nullptr;
+        }
+        if (!match({ Token::Type::ClosingParentheses })) {
+            return nullptr;
+        }
+    } else {
+        advance();
+    }
+    if (check(Token::Type::ArrowOperator)) {
+        result->result = variable_decl();
+        if (!result->result) {
+            return nullptr;
+        }
+    } else {
+        advance();
+    }
+    result->body = body();
+    if (!result->body) {
+        return nullptr;
+    }
+    return result;
+}
+
+std::shared_ptr<VariableDecl> Parser::variable_decl() {
+    std::cout << "not implemented: " << __func__ << std::endl;
+    return nullptr;
+}
+
+std::shared_ptr<VariableDeclList> Parser::variable_decl_list() {
+    std::cout << "not implemented: " << __func__ << std::endl;
+    return nullptr;
+}
+
+std::shared_ptr<Body> Parser::body() {
+    std::cout << "not implemented: " << __func__ << std::endl;
+    return nullptr;
+}
+
+std::shared_ptr<Statement> Parser::statement() {
+    std::cout << "not implemented: " << __func__ << std::endl;
+    return nullptr;
+}
+
+std::shared_ptr<Statements> Parser::statements() {
+    std::cout << "not implemented: " << __func__ << std::endl;
+    return nullptr;
+}
+
+bool Parser::match(std::vector<Token::Type> types) {
+    bool result = true;
+    for (auto type : types) {
+        if (check(type)) {
+            advance();
+        } else {
+            result = false;
+            std::cout << "error: line " << current().line << ": expected " << type << " (between " << previous().type << " and " << peek().type << "), instead got " << current().type << "\n";
+            break;
+        }
+    }
+    return result;
+}
+
+bool Parser::check(Token::Type type) {
+    return current().type == type;
+}
+
+Token Parser::previous() {
+    if (m_i == 0) {
+        return Token { Token::Type::StartOfUnit, "", m_tokens[m_i].line };
+    } else {
+        return m_tokens[m_i - 1];
+    }
+}
+
+Token Parser::peek() {
+    if (m_i + 1 >= m_tokens.size()) {
+        return Token { Token::Type::EndOfUnit, "", m_tokens[m_i].line };
+    } else {
+        return m_tokens[m_i + 1];
+    }
+}
+
+}
 
 int main(int, char**) {
     std::string source(test_program);
@@ -35,15 +291,41 @@ int main(int, char**) {
         } else if (*iter == '\n') {
             ++line;
             continue;
+        } else if (*iter == '-') {
+            if ((iter + 1) < source.end() && *(iter + 1) == '>') {
+                tok.type = Token::Type::ArrowOperator;
+                ++iter;
+            } else {
+                tok.type = Token::Type::MinusOperator;
+            }
         } else if (std::isalpha(*iter)) { // identifer
             auto end = std::find_if_not(iter, source.end(), [](char c) { return std::isalnum(c); });
-            tok.type = Token::Type::Identifier;
-            tok.value = std::string(iter, end);
+            auto str = std::string(iter, end);
+            if (str == "fn") {
+                tok.type = Token::Type::FnKeyword;
+            } else if (std::find(typenames.begin(), typenames.end(), str) != typenames.end()) {
+                tok.type = Token::Type::Typename;
+            } else {
+                tok.type = Token::Type::Identifier;
+                tok.value = str;
+            }
             iter = end - 1;
-        } else if (*iter == '(') { // open parens
-            tok.type = Token::Type::OpenParentheses;
-        } else if (*iter == ')') { // closing parens
+        } else if (*iter == '(') {
+            tok.type = Token::Type::OpeningParentheses;
+        } else if (*iter == ')') {
             tok.type = Token::Type::ClosingParentheses;
+        } else if (*iter == '{') {
+            tok.type = Token::Type::OpeningBrace;
+        } else if (*iter == '}') {
+            tok.type = Token::Type::ClosingBrace;
+        } else if (*iter == '=') {
+            tok.type = Token::Type::Equals;
+        } else if (*iter == '+') {
+            tok.type = Token::Type::PlusOperator;
+        } else if (*iter == '*') {
+            tok.type = Token::Type::MultiplyOperator;
+        } else if (*iter == '/') {
+            tok.type = Token::Type::DivideOperator;
         } else if (std::isdigit(*iter)) { // numeric literal
             auto end = std::find_if_not(iter, source.end(), [](char c) { return std::isdigit(c); });
             auto str = std::string(iter, end);
@@ -76,16 +358,52 @@ int main(int, char**) {
     for (const auto& tok : tokens) {
         if (tok.line > last_line) {
             std::cout << "\n";
-            last_line = line;
+            last_line = tok.line;
         }
         switch (tok.type) {
+        case Token::Type::EndOfUnit:
+            assert(!"not reachable");
+            break;
+        case Token::Type::StartOfUnit:
+            assert(!"not reachable");
+            break;
+        case Token::Type::FnKeyword:
+            std::cout << "fn ";
+            break;
+        case Token::Type::ArrowOperator:
+            std::cout << "->";
+            break;
+        case Token::Type::Typename:
+            std::cout << "type ";
+            break;
+        case Token::Type::Equals:
+            std::cout << "=";
+            break;
+        case Token::Type::OpeningBrace:
+            std::cout << "{";
+            break;
+        case Token::Type::ClosingBrace:
+            std::cout << "}";
+            break;
+        case Token::Type::PlusOperator:
+            std::cout << "+";
+            break;
+        case Token::Type::MinusOperator:
+            std::cout << "-";
+            break;
+        case Token::Type::MultiplyOperator:
+            std::cout << "*";
+            break;
+        case Token::Type::DivideOperator:
+            std::cout << "/";
+            break;
         case Token::Type::Comma:
             std::cout << ",";
             break;
         case Token::Type::Identifier:
             std::cout << "id";
             break;
-        case Token::Type::OpenParentheses:
+        case Token::Type::OpeningParentheses:
             std::cout << "(";
             break;
         case Token::Type::ClosingParentheses:
@@ -104,24 +422,8 @@ int main(int, char**) {
     }
     std::cout << std::endl;
 
-    /*
     // syntax check
-    for (auto iter = tokens.begin(); iter != tokens.end();) {
-        auto consume = [&] { ++iter; };
-        auto next_is = [&](Token::Type type) -> bool {
-            if (iter + 1 >= tokens.end()) {
-                return false;
-            } else {
-                return (iter + 1)->type == type;
-            }
-        };
-        auto expect_consume = [&](std::vector<Token::Type> types) -> bool {
-            if (std::none_of(types.begin(), types.end(), [&](Token::Type t) { return t == iter->type; })) {
-                std::cout << iter->line << ": token " << size_t(iter->type) << " did not encounter expected types.\n";
-                return false;
-            }
-            consume();
-            return true;
-        };
-    }*/
+    AST::Parser parser(tokens);
+    auto tree = parser.unit();
+    std::cout << "done!\n";
 }

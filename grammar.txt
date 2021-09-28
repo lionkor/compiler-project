@@ -1,0 +1,61 @@
+unit:
+    function_declaration ...
+
+function_declaration:
+    'fn' IDENTIFIER '(' variable_declaration_list ')' '->' variable_declaration body
+    'fn' IDENTIFIER '(' ')' '->' variable_declaration body
+    'fn' IDENTIFIER '(' ')' body
+
+body:
+    '{' statements '}'
+    '{' '}'
+
+statements:
+    statement ';'
+    statement ';' statements
+
+statement:
+    variable_declaration
+    assignment
+
+assignment:
+    IDENTIFIER '=' expression
+
+expression:
+    unary_expression
+    binary_expression
+    STRING_LITERAL
+
+unary_expression:
+    IDENTIFIER
+    NUMERIC_LITERAL
+    unary_operator NUMERIC_LITERAL
+    unary_operator IDENTIFIER
+
+unary_operator:
+    '-'
+    '+'
+
+binary_expression:
+    unary_expression binary_operator unary_expression
+
+binary_operator:
+    '+'
+    '-'
+    '*'
+    '/'
+
+variable_declaration_list:
+    variable_declaration
+    variable_declaration ',' variable_declaration_list
+
+variable_declaration:
+    typename IDENTIFIER
+
+typename:
+    'i64'
+    'bool'
+    'u64'
+    'char'
+    typename '*'
+
