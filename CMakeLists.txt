@@ -10,6 +10,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra --pedantic -fno-exceptions
 
 add_executable(compiler
     src/main.cpp
+    src/AST.h src/AST.cpp
     )
 
 target_link_libraries(compiler LK)
