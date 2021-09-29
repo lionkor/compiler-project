@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <variant>
@@ -142,7 +143,7 @@ struct Statement : public Node {
 };
 
 struct Expression : public Node {
-    std::shared_ptr<Node> term_or_fn_call;
+    std::shared_ptr<Term> term;
     virtual std::string to_string(size_t level);
 };
 
@@ -444,8 +445,8 @@ std::shared_ptr<Identifier> Parser::identifier() {
 
 std::shared_ptr<Expression> Parser::expression() {
     auto result = std::make_shared<Expression>();
-    result->term_or_fn_call = term();
-    if (!result->term_or_fn_call) {
+    result->term = term();
+    if (!result->term) {
         return nullptr;
     }
     return result;
@@ -683,7 +684,7 @@ std::string Statement::to_string(size_t level) {
 }
 
 std::string Expression::to_string(size_t level) {
-    return "Expression\n" + indent(level) + term_or_fn_call->to_string(level + 1);
+    return "Expression\n" + indent(level) + term->to_string(level + 1);
 }
 
 std::string Term::to_string(size_t level) {
@@ -808,6 +809,11 @@ std::string FunctionCall::to_string(size_t level) {
     return res;
 }
 
+}
+
+template<typename Base, typename T>
+inline bool is_instance_of(const std::shared_ptr<T>&) {
+    return std::is_base_of<Base, T>::value;
 }
 
 int main(int argc, char** argv) {
@@ -981,5 +987,120 @@ int main(int argc, char** argv) {
         std::cout << tree->to_string(1) << std::endl;
     }
     std::cout << "info: syntax parser had " << parser.error_count() << " errors." << std::endl;
-    return parser.error_count();
+    if (parser.error_count() > 0) {
+        return parser.error_count();
+    }
+
+    struct Program {
+        void add_line(const std::string& line) { lines.push_back(line); }
+        void add_label(const std::string& label) { lines.push_back(label + ":"); }
+        std::vector<std::string> lines;
+    };
+
+    Program program;
+    // compile a node into instructions
+    auto func = tree->decls.at(0);
+    std::cout << "looking at node:\n"
+              << func->to_string(1) << "\n";
+
+    const std::vector<std::string> registers = {
+        "rdi", "rsi", "rdx", "rcx", "r8", "r9",
+        "r10", "r11", "r12", "r13", "r14", "r15"
+    };
+    size_t current_reg = 0;
+    auto next_register = [&]() -> std::string {
+        assert(current_reg < registers.size());
+        return registers[current_reg++];
+    };
+
+    std::unordered_map<std::string, std::string> identifier_register_map;
+
+    auto generate_signature = [&](const std::shared_ptr<AST::FunctionDecl>& func) -> std::string {
+        std::string res = func->name->name;
+        res += "(";
+        if (func->arguments) {
+            for (const auto& arg : func->arguments->variables) {
+                res += arg->type_name->name + " " + identifier_register_map.at(arg->identifier->name);
+                if (arg != func->arguments->variables.back()) {
+                    res += ",";
+                }
+            }
+        }
+        res += ")";
+        if (func->result) {
+            res += "->" + func->result->type_name->name + " " + identifier_register_map.at(func->result->identifier->name);
+        }
+        return res;
+    };
+
+    if (func->body && func->body->statements) {
+        identifier_register_map.clear();
+        size_t arg_count = 0;
+        std::string function_name = func->name->name;
+        if (func->arguments) {
+            arg_count = func->arguments->variables.size();
+        }
+
+        auto is_identifier_known = [&identifier_register_map](const std::string& id) {
+            return std::find_if(identifier_register_map.begin(), identifier_register_map.end(),
+                       [&](const auto& pair) -> bool {
+                           return pair.first == id;
+                       })
+                != identifier_register_map.end();
+        };
+        if (func->result) {
+            identifier_register_map[func->result->identifier->name] = "rax";
+        }
+        if (func->arguments) {
+            for (const auto& arg : func->arguments->variables) {
+                if (is_identifier_known(arg->identifier->name)) {
+                    std::cout << "error: identifier " + arg->identifier->name + " declared twice.\n";
+                    // TODO: error
+                    break;
+                }
+                identifier_register_map[arg->identifier->name] = next_register();
+                std::cout << "identifier \"" << arg->identifier->name << "\" got register " << identifier_register_map[arg->identifier->name] << "\n";
+            }
+        }
+        program.add_line("; function " + generate_signature(func));
+        program.add_label(func->name->name);
+        for (const auto& statement : func->body->statements->statements) {
+            if (auto a = dynamic_cast<AST::Assignment*>(statement->statement.get())) {
+                program.add_line("  ; assignment");
+                std::string line = "  mov ";
+                line += identifier_register_map.at(a->identifier->name);
+                line += ", ";
+                // go deeper!
+                for (const auto& factor : a->expression->term->factors) {
+                    for (const auto& unary : factor->unaries) {
+                        if (auto primary = dynamic_cast<AST::Primary*>(unary->unary_or_primary.get())) {
+                            if (auto numeric_literal = dynamic_cast<AST::NumericLiteral*>(primary->value.get())) {
+                                line += std::to_string(numeric_literal->value);
+                            }
+                        }
+                    }
+                }
+                program.add_line(line);
+            }
+        }
+        program.add_line("  ; return from " + function_name);
+        program.add_line("  ret");
+    }
+
+    auto outfile_name = std::filesystem::path(argv[1]).stem().string() + ".asm";
+    std::ofstream outfile(outfile_name);
+    outfile << "global _start\n"
+            << "section .text\n\n";
+    for (auto& line : program.lines) {
+        outfile << line << "\n";
+    }
+    outfile << R"(
+; core language _start
+_start:
+  call main
+  mov rdi, rax
+  mov rax, 60
+  syscall
+)";
+    std::cout << "info: written program to \"" << outfile_name << "\".";
 }
