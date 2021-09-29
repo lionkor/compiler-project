@@ -7,11 +7,15 @@ function_declaration        -> 'fn' IDENTIFIER '(' ?variable_declaration_list ')
 body                        -> '{' statement * '}'
 
 statement                   -> assignment
+                            | function_call
 
 assignment                  -> IDENTIFIER '=' expression
 
 expression                  -> term
+                            | function_call
 
+function_call               -> IDENTIFIER '(' expression (',' expression)* ')'                            
+                            
 term                        -> factor ( ( '+' | '-' ) factor )*
 
 factor                      -> unary ( ( '*' | '/' ) unary )*
