@@ -8,9 +8,7 @@
 #include <variant>
 
 const char* test_program = R"(
-fn main(i64 a, i64 b) -> i64 ret {
-    ret = 1 * 2 + (2 - 1);
-}
+fn main() {}
 )";
 
 struct Token {
@@ -487,6 +485,7 @@ std::shared_ptr<Unary> Parser::unary() {
         std::string op;
         op += std::get<char>(current().value);
         advance();
+        result->op = op;
         result->unary_or_primary = unary();
     } else {
         result->unary_or_primary = primary();
@@ -662,7 +661,12 @@ std::string Factor::to_string(size_t level) {
 }
 
 std::string Unary::to_string(size_t level) {
-    return "Unary\n" + indent(level) + op + unary_or_primary->to_string(level + 1);
+    std::string res = "Unary\n";
+    if (!empty(op)) {
+        res += indent(level) + "operator " + op + "\n";
+    }
+    res += indent(level) + unary_or_primary->to_string(level + 1);
+    return res;
 }
 
 std::string Primary::to_string(size_t level) {
@@ -728,8 +732,12 @@ std::string VariableDeclList::to_string(size_t level) {
 std::string FunctionDecl::to_string(size_t level) {
     std::string res = "Function\n";
     res += indent(level) + name->to_string(level + 1);
-    res += indent(level) + "Arguments: " + arguments->to_string(level + 1);
-    res += indent(level) + "Result: " + result->to_string(level + 1);
+    if (arguments) {
+        res += indent(level) + "Arguments: " + arguments->to_string(level + 1);
+    }
+    if (result) {
+        res += indent(level) + "Result: " + result->to_string(level + 1);
+    }
     res += indent(level) + body->to_string(level + 1);
     return res;
 }
