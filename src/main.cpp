@@ -123,10 +123,17 @@ struct Unit;
 struct Unary;
 struct Primary;
 struct GroupedExpression;
+struct FunctionCall;
 
 struct Node {
     virtual ~Node() { }
     virtual std::string to_string(size_t) { return "Node{}"; }
+};
+
+struct FunctionCall : public Node {
+    std::shared_ptr<Identifier> name;
+    std::vector<std::shared_ptr<Expression>> arguments;
+    virtual std::string to_string(size_t level);
 };
 
 struct Statement : public Node {
@@ -135,7 +142,7 @@ struct Statement : public Node {
 };
 
 struct Expression : public Node {
-    std::shared_ptr<Term> term;
+    std::shared_ptr<Node> term_or_fn_call;
     virtual std::string to_string(size_t level);
 };
 
@@ -241,6 +248,7 @@ public:
     std::shared_ptr<Assignment> assignment();
     std::shared_ptr<Identifier> identifier();
     std::shared_ptr<Expression> expression();
+    std::shared_ptr<FunctionCall> function_call();
     std::shared_ptr<Term> term();
     std::shared_ptr<Factor> factor();
     std::shared_ptr<Unary> unary();
@@ -251,8 +259,8 @@ public:
     std::shared_ptr<StringLiteral> string_literal();
     std::shared_ptr<Typename> type_name();
 
-    void errors_off() { bool m_errors = false; }
-    void errors_on() { bool m_errors = true; }
+    void errors_off() { m_errors = false; }
+    void errors_on() { m_errors = true; }
 
 private:
     bool match(std::vector<Token::Type>);
@@ -376,7 +384,11 @@ std::shared_ptr<Body> Parser::body() {
 
 std::shared_ptr<Statement> Parser::statement() {
     auto result = std::make_shared<Statement>();
-    result->statement = assignment();
+    if (check(Token::Type::Identifier) && peek().type == Token::Type::OpeningParentheses) {
+        result->statement = function_call();
+    } else {
+        result->statement = assignment();
+    }
     if (!result->statement) {
         return nullptr;
     }
@@ -430,8 +442,42 @@ std::shared_ptr<Identifier> Parser::identifier() {
 
 std::shared_ptr<Expression> Parser::expression() {
     auto result = std::make_shared<Expression>();
-    result->term = term();
-    if (!result->term) {
+    if (check(Token::Type::Identifier) && peek().type == Token::Type::OpeningParentheses) {
+        result->term_or_fn_call = function_call();
+    } else {
+        result->term_or_fn_call = term();
+    }
+    if (!result->term_or_fn_call) {
+        return nullptr;
+    }
+    return result;
+}
+
+std::shared_ptr<FunctionCall> Parser::function_call() {
+    auto result = std::make_shared<FunctionCall>();
+    result->name = identifier();
+    if (!result->name) {
+        return nullptr;
+    }
+    if (!match({ Token::Type::OpeningParentheses })) {
+        return nullptr;
+    }
+    bool first_arg = true;
+    while (!check(Token::Type::ClosingParentheses)) {
+        if (!first_arg && !match({ Token::Type::Comma })) {
+            return nullptr;
+        }
+        if (first_arg) {
+            first_arg = false;
+        }
+        auto next_arg = expression();
+        if (!next_arg) {
+            error("expected expression for function argument, instead got invalid expression");
+            return nullptr;
+        }
+        result->arguments.push_back(next_arg);
+    }
+    if (!match({ Token::Type::ClosingParentheses })) {
         return nullptr;
     }
     return result;
@@ -633,7 +679,7 @@ std::string Statement::to_string(size_t level) {
 }
 
 std::string Expression::to_string(size_t level) {
-    return "Expression\n" + indent(level) + term->to_string(level + 1);
+    return "Expression\n" + indent(level) + term_or_fn_call->to_string(level + 1);
 }
 
 std::string Term::to_string(size_t level) {
@@ -748,6 +794,16 @@ std::string Unit::to_string(size_t level) {
     return res;
 }
 
+std::string FunctionCall::to_string(size_t level) {
+    std::string res = "FunctionCall\n";
+    res += indent(level) + name->to_string(level + 1);
+    res += indent(level) + "Arguments:\n";
+    for (const auto& arg : arguments) {
+        res += indent(level + 1) + arg->to_string(level + 2);
+    }
+    return res;
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -764,7 +820,7 @@ int main(int argc, char** argv) {
     source.resize(std::filesystem::file_size(argv[1]));
     std::fread(source.data(), 1, source.size(), file);
     std::fclose(file);
-    
+
     std::cout << "test program: \"" << source << "\"\n";
     std::vector<Token> tokens;
     size_t line = 1;
