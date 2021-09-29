@@ -1,15 +1,13 @@
 #include <String.h>
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <variant>
-
-const char* test_program = R"(
-fn main() {}
-)";
 
 struct Token {
     enum class Type {
@@ -752,8 +750,21 @@ std::string Unit::to_string(size_t level) {
 
 }
 
-int main(int, char**) {
-    std::string source(test_program);
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cout << argv[0] << ": missing argument" << std::endl;
+        return 1;
+    }
+    FILE* file = std::fopen(argv[1], "r");
+    if (!file) {
+        std::cout << argv[0] << ": failed to open \"" << argv[1] << "\": " << std::strerror(errno) << "\n";
+        return 1;
+    }
+    std::string source;
+    source.resize(std::filesystem::file_size(argv[1]));
+    std::fread(source.data(), 1, source.size(), file);
+    std::fclose(file);
+    
     std::cout << "test program: \"" << source << "\"\n";
     std::vector<Token> tokens;
     size_t line = 1;
