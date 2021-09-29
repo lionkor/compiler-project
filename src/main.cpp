@@ -259,8 +259,9 @@ public:
     std::shared_ptr<StringLiteral> string_literal();
     std::shared_ptr<Typename> type_name();
 
-    void errors_off() { m_errors = false; }
-    void errors_on() { m_errors = true; }
+    size_t error_count() const { return m_error_count; }
+    void errors_off() { m_errors_enabled = false; }
+    void errors_on() { m_errors_enabled = true; }
 
 private:
     bool match(std::vector<Token::Type>);
@@ -274,7 +275,8 @@ private:
     void error_expected(Token::Type expected);
     size_t m_i { 0 };
     std::vector<Token> m_tokens;
-    bool m_errors { true };
+    bool m_errors_enabled { true };
+    size_t m_error_count { 0 };
 };
 
 std::shared_ptr<Unit> Parser::unit() {
@@ -442,11 +444,7 @@ std::shared_ptr<Identifier> Parser::identifier() {
 
 std::shared_ptr<Expression> Parser::expression() {
     auto result = std::make_shared<Expression>();
-    if (check(Token::Type::Identifier) && peek().type == Token::Type::OpeningParentheses) {
-        result->term_or_fn_call = function_call();
-    } else {
-        result->term_or_fn_call = term();
-    }
+    result->term_or_fn_call = term();
     if (!result->term_or_fn_call) {
         return nullptr;
     }
@@ -547,7 +545,11 @@ std::shared_ptr<Primary> Parser::primary() {
     } else if (check(Token::Type::StringLiteral)) {
         result->value = string_literal();
     } else if (check(Token::Type::Identifier)) {
-        result->value = identifier();
+        if (peek().type == Token::Type::OpeningParentheses) {
+            result->value = function_call();
+        } else {
+            result->value = identifier();
+        }
     } else {
         result->value = grouped_expression();
     }
@@ -652,7 +654,8 @@ Token Parser::peek() {
 }
 
 void Parser::error(const std::string& what) {
-    if (m_errors) {
+    if (m_errors_enabled) {
+        ++m_error_count;
         std::cout << "error: line " << current().line << ": " << what << std::endl;
     }
 }
@@ -807,7 +810,7 @@ std::string FunctionCall::to_string(size_t level) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
+    if (argc < 2) {
         std::cout << argv[0] << ": missing argument" << std::endl;
         return 1;
     }
@@ -821,7 +824,7 @@ int main(int argc, char** argv) {
     std::fread(source.data(), 1, source.size(), file);
     std::fclose(file);
 
-    std::cout << "test program: \"" << source << "\"\n";
+    std::cout << "info: loaded source of size " << source.size() << " bytes.\n";
     std::vector<Token> tokens;
     size_t line = 1;
     for (auto iter = source.begin(); iter != source.end() && *iter; ++iter) {
@@ -899,7 +902,7 @@ int main(int argc, char** argv) {
         }
         tokens.push_back(std::move(tok));
     }
-    size_t last_line = 1;
+    /* size_t last_line = 1;
     for (const auto& tok : tokens) {
         if (tok.line > last_line) {
             std::cout << "\n";
@@ -965,10 +968,17 @@ int main(int argc, char** argv) {
             break;
         }
     }
-    std::cout << std::endl;
+    std::cout << std::endl;*/
+
+    std::cout << "info: counted " << line - 1 << " lines.\n";
+    std::cout << "info: parsed " << tokens.size() << " tokens.\n";
 
     // syntax check
     AST::Parser parser(tokens);
     auto tree = parser.unit();
-    std::cout << tree->to_string(1) << std::endl;
+    if (argc > 2 && std::string(argv[2]) == "-d") {
+        std::cout << tree->to_string(1) << std::endl;
+    }
+    std::cout << "info: syntax parser had " << parser.error_count() << " errors." << std::endl;
+    return parser.error_count();
 }

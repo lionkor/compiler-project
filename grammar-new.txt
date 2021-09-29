@@ -6,8 +6,7 @@ function_declaration        -> 'fn' IDENTIFIER '(' ?variable_declaration_list ')
 
 body                        -> '{' statement * '}'
 
-statement                   -> assignment
-                            | function_call
+statement                   -> assignment ';'
 
 assignment                  -> IDENTIFIER '=' expression
 
@@ -26,6 +25,7 @@ unary                       -> ?'-' unary
 primary                     -> literal
                             | IDENTIFIER
                             | grouped_expression
+                            | function_call
                             
 literal                     -> NUMERIC_LITERAL
                             | STRING_LITERAL
