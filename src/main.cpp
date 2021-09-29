@@ -670,9 +670,10 @@ static inline std::string indent(size_t level) {
     std::string result;
     for (size_t i = 0; i < level; ++i) {
         if (i % 2 == 0) {
-            result += "|";
+            result += "| ";
+        } else {
+            result += " ";
         }
-        result += " ";
     }
     return result;
 }
