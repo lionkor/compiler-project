@@ -21,16 +21,23 @@ assignment:
     IDENTIFIER '=' expression
 
 expression:
+    literal
     unary_expression
     binary_expression
+    grouped_expression
 
+grouped_expression:
+    '(' expression ')'
+    
 unary_expression:
+    unary_operator expression
+    unary_operator expression
+
+literal:
     IDENTIFIER
     NUMERIC_LITERAL
-    unary_operator NUMERIC_LITERAL
-    unary_operator IDENTIFIER
     STRING_LITERAL
-
+    
 unary_operator:
     '-'
 

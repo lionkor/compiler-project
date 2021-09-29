@@ -1,0 +1,38 @@
+// reference: https://craftinginterpreters.com/parsing-expressions.html
+
+unit                        -> function_declaration *
+
+function_declaration        -> 'fn' IDENTIFIER '(' ?variable_declaration_list ')' '->' ?variable_declaration body
+
+body                        -> '{' statement * '}'
+
+statement                   -> assignment
+
+assignment                  -> IDENTIFIER '=' expression
+
+expression                  -> term
+
+term                        -> factor ( ( '+' | '-' ) factor )*
+
+factor                      -> unary ( ( '*' | '/' ) unary )*
+
+unary                       -> ?'-' unary
+                            | primary
+
+primary                     -> literal
+                            | IDENTIFIER
+                            | grouped_expression
+                            
+literal                     -> NUMERIC_LITERAL
+                            | STRING_LITERAL
+                            
+grouped_expression          -> '(' expression ')'
+
+variable_declaration_list   -> variable_declaration ( ',' variable_declaration )*
+
+variable_declaration        -> typename IDENTIFIER
+
+typename                    -> 'i64'
+                            | 'bool'
+                            | 'u64'
+                            | 'char'

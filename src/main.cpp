@@ -8,12 +8,8 @@
 #include <variant>
 
 const char* test_program = R"(
-fn add(i64 a, i64 b) -> i64 c {
-    c = a + b;
-}
-
-fn main() -> i64 ret {
-    ret = add(1, 2);
+fn main(i64 a, i64 b) -> i64 ret {
+    ret = 1 * 2 + (2 - 1);
 }
 )";
 
@@ -117,86 +113,109 @@ namespace AST {
 
 struct Statement;
 struct Expression;
-struct UnaryOperator;
-struct UnaryExpression;
-struct BinaryOperator;
-struct BinaryExpression;
 struct Assignment;
 struct Statements;
+struct Term;
 struct Body;
 struct Identifier;
 struct Typename;
 struct VariableDecl;
 struct VariableDeclList;
 struct FunctionDecl;
+struct Factor;
 struct Unit;
+struct Unary;
+struct Primary;
+struct GroupedExpression;
 
 struct Node {
+    virtual ~Node() { }
+    virtual std::string to_string(size_t) { return "Node{}"; }
 };
 
 struct Statement : public Node {
     std::shared_ptr<Node> statement;
+    virtual std::string to_string(size_t level);
 };
 
 struct Expression : public Node {
-    std::shared_ptr<Node> expression;
+    std::shared_ptr<Term> term;
+    virtual std::string to_string(size_t level);
 };
 
-struct UnaryOperator : public Node {
-    std::string what;
+struct Term : public Node {
+    std::vector<std::shared_ptr<Factor>> factors;
+    std::vector<std::string> operators; // one less than factors
+    virtual std::string to_string(size_t level);
 };
 
-struct UnaryExpression : public Node {
-    std::shared_ptr<Node> value;
-    std::shared_ptr<UnaryOperator> unary_operator;
+struct Factor : public Node {
+    std::vector<std::shared_ptr<Unary>> unaries;
+    std::vector<std::string> operators; // one less than unaries
+    virtual std::string to_string(size_t level);
 };
 
-struct BinaryOperator : public Node {
-    std::string what;
+struct Unary : public Node {
+    std::string op;
+    std::shared_ptr<Node> unary_or_primary;
+    virtual std::string to_string(size_t level);
 };
 
-struct BinaryExpression : public Node {
-    std::shared_ptr<Expression> left;
-    std::shared_ptr<Expression> right;
-    std::shared_ptr<BinaryOperator> binary_operator;
+struct Primary : public Node {
+    std::shared_ptr<Node> value; // literal, identifier or grouped expression
+    virtual std::string to_string(size_t level);
+};
+
+struct GroupedExpression : public Node {
+    std::shared_ptr<Expression> expression;
+    virtual std::string to_string(size_t level);
 };
 
 struct Assignment : public Node {
     std::shared_ptr<Identifier> identifier;
     std::shared_ptr<Expression> expression;
+    virtual std::string to_string(size_t level);
 };
 
 struct Statements : public Node {
     std::vector<std::shared_ptr<Statement>> statements;
+    virtual std::string to_string(size_t level);
 };
 
 struct Body : public Node {
     std::shared_ptr<Statements> statements;
+    virtual std::string to_string(size_t level);
 };
 
 struct Identifier : public Node {
     std::string name;
+    virtual std::string to_string(size_t level);
 };
 
 struct Typename : public Node {
     std::string name;
+    virtual std::string to_string(size_t level);
 };
 
 struct NumericLiteral : public Node {
     size_t value;
+    virtual std::string to_string(size_t level);
 };
 
 struct StringLiteral : public Node {
     std::string value;
+    virtual std::string to_string(size_t level);
 };
 
 struct VariableDecl : public Node {
     std::shared_ptr<Identifier> identifier;
     std::shared_ptr<Typename> type_name;
+    virtual std::string to_string(size_t level);
 };
 
 struct VariableDeclList : public Node {
     std::vector<std::shared_ptr<VariableDecl>> variables;
+    virtual std::string to_string(size_t level);
 };
 
 struct FunctionDecl : public Node {
@@ -204,10 +223,12 @@ struct FunctionDecl : public Node {
     std::shared_ptr<VariableDeclList> arguments;
     std::shared_ptr<VariableDecl> result;
     std::shared_ptr<Body> body;
+    virtual std::string to_string(size_t level);
 };
 
 struct Unit : public Node {
     std::vector<std::shared_ptr<FunctionDecl>> decls;
+    virtual std::string to_string(size_t level);
 };
 
 class Parser {
@@ -224,13 +245,23 @@ public:
     std::shared_ptr<Assignment> assignment();
     std::shared_ptr<Identifier> identifier();
     std::shared_ptr<Expression> expression();
+    std::shared_ptr<Term> term();
+    std::shared_ptr<Factor> factor();
+    std::shared_ptr<Unary> unary();
+    std::shared_ptr<Primary> primary();
+    std::shared_ptr<GroupedExpression> grouped_expression();
+    std::shared_ptr<Node> literal();
+    std::shared_ptr<NumericLiteral> numeric_literal();
+    std::shared_ptr<StringLiteral> string_literal();
     std::shared_ptr<Typename> type_name();
-    std::shared_ptr<BinaryExpression> binary_expression();
-    std::shared_ptr<UnaryExpression> unary_expression();
+
+    void errors_off() { bool m_errors = false; }
+    void errors_on() { bool m_errors = true; }
 
 private:
     bool match(std::vector<Token::Type>);
     bool check(Token::Type);
+    bool check_any_of(std::vector<Token::Type>);
     void advance() { ++m_i; }
     Token previous();
     Token peek();
@@ -239,15 +270,18 @@ private:
     void error_expected(Token::Type expected);
     size_t m_i { 0 };
     std::vector<Token> m_tokens;
+    bool m_errors { true };
 };
 
 std::shared_ptr<Unit> Parser::unit() {
     auto result = std::make_shared<Unit>();
     std::shared_ptr<FunctionDecl> fn;
     for (;;) {
+        if (peek().type == Token::Type::EndOfUnit) {
+            break;
+        }
         fn = function_decl();
         if (fn) {
-
             result->decls.push_back(fn);
         } else {
             break;
@@ -293,12 +327,12 @@ std::shared_ptr<FunctionDecl> Parser::function_decl() {
 
 std::shared_ptr<VariableDecl> Parser::variable_decl() {
     auto result = std::make_shared<VariableDecl>();
-    result->identifier = identifier();
-    if (!result->identifier) {
-        return nullptr;
-    }
     result->type_name = type_name();
     if (!result->type_name) {
+        return nullptr;
+    }
+    result->identifier = identifier();
+    if (!result->identifier) {
         return nullptr;
     }
     return result;
@@ -347,12 +381,23 @@ std::shared_ptr<Body> Parser::body() {
 std::shared_ptr<Statement> Parser::statement() {
     auto result = std::make_shared<Statement>();
     result->statement = assignment();
+    if (!result->statement) {
+        return nullptr;
+    }
+    if (!match({ Token::Type::Semicolon })) {
+        return nullptr;
+    }
     return result;
 }
 
+// TODO statements should be (statement)* on body
 std::shared_ptr<Statements> Parser::statements() {
     auto result = std::make_shared<Statements>();
     for (;;) {
+        if (check(Token::Type::ClosingBrace)) {
+            // end of block
+            break;
+        }
         auto stmt = statement();
         if (stmt) {
             result->statements.push_back(stmt);
@@ -369,6 +414,9 @@ std::shared_ptr<Assignment> Parser::assignment() {
     if (!result->identifier) {
         return nullptr;
     }
+    if (!match({ Token::Type::Equals })) {
+        return nullptr;
+    }
     result->expression = expression();
     return result;
 }
@@ -380,21 +428,102 @@ std::shared_ptr<Identifier> Parser::identifier() {
         return nullptr;
     }
     result->name = std::get<std::string>(current().value);
+    advance();
     return result;
 }
 
 std::shared_ptr<Expression> Parser::expression() {
     auto result = std::make_shared<Expression>();
-    // is unary?
-    if (check(Token::Type::Identifier)
-        || check(Token::Type::NumericLiteral)
-        || check(Token::Type::StringLiteral)
-        || check(Token::Type::MinusOperator)) {
-        result->expression = unary_expression();
-    } else {
-        result->expression = binary_expression();
+    result->term = term();
+    if (!result->term) {
+        return nullptr;
     }
+    return result;
+}
+
+std::shared_ptr<Term> Parser::term() {
+    auto result = std::make_shared<Term>();
+    for (;;) {
+        std::shared_ptr<Factor> thisfactor = factor();
+        if (!thisfactor) {
+            return nullptr;
+        }
+        result->factors.push_back(thisfactor);
+        if (check_any_of({ Token::Type::PlusOperator, Token::Type::MinusOperator })) {
+            std::string op;
+            op += std::get<char>(current().value);
+            advance();
+            result->operators.push_back(op);
+        } else {
+            break;
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<Factor> Parser::factor() {
+    auto result = std::make_shared<Factor>();
+    for (;;) {
+        auto thisunary = unary();
+        if (!thisunary) {
+            return nullptr;
+        }
+        result->unaries.push_back(thisunary);
+        if (check_any_of({ Token::Type::MultiplyOperator, Token::Type::DivideOperator })) {
+            std::string op;
+            op += std::get<char>(current().value);
+            advance();
+            result->operators.push_back(op);
+        } else {
+            break;
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<Unary> Parser::unary() {
+    auto result = std::make_shared<Unary>();
+    if (check(Token::Type::MinusOperator)) {
+        std::string op;
+        op += std::get<char>(current().value);
+        advance();
+        result->unary_or_primary = unary();
+    } else {
+        result->unary_or_primary = primary();
+    }
+    if (!result->unary_or_primary) {
+        return nullptr;
+    }
+    return result;
+}
+
+std::shared_ptr<Primary> Parser::primary() {
+    auto result = std::make_shared<Primary>();
+    if (check(Token::Type::NumericLiteral)) {
+        result->value = numeric_literal();
+    } else if (check(Token::Type::StringLiteral)) {
+        result->value = string_literal();
+    } else if (check(Token::Type::Identifier)) {
+        result->value = identifier();
+    } else {
+        result->value = grouped_expression();
+    }
+    if (!result->value) {
+        return nullptr;
+    }
+    return result;
+}
+
+std::shared_ptr<GroupedExpression> Parser::grouped_expression() {
+    auto result = std::make_shared<GroupedExpression>();
+    if (!match({ Token::Type::OpeningParentheses })) {
+        return nullptr;
+    }
+    result->expression = expression();
     if (!result->expression) {
+        return nullptr;
+    }
+    if (!match({ Token::Type::ClosingParentheses })) {
         return nullptr;
     }
     return result;
@@ -407,28 +536,38 @@ std::shared_ptr<Typename> Parser::type_name() {
         return nullptr;
     }
     result->name = std::get<std::string>(current().value);
+    advance();
     return result;
 }
 
-std::shared_ptr<BinaryExpression> Parser::binary_expression() {
-    auto result = std::make_shared<BinaryExpression>();
-    result->left = expression();
-    if (!result->left) {
+std::shared_ptr<NumericLiteral> Parser::numeric_literal() {
+    auto result = std::make_shared<NumericLiteral>();
+    if (!match({ Token::Type::NumericLiteral })) {
         return nullptr;
     }
-    result->binary_operator = binary_operator();
-    if (!result->binary_operator) {
-        return nullptr;
-    }
-    result->right = expression();
-    if (!result->right) {
-        return nullptr;
-    }
+    result->value = std::get<size_t>(previous().value);
     return result;
 }
 
-std::shared_ptr<UnaryExpression> Parser::unary_expression() {
-    // TODO
+std::shared_ptr<StringLiteral> Parser::string_literal() {
+    auto result = std::make_shared<StringLiteral>();
+    if (!match({ Token::Type::StringLiteral })) {
+        return nullptr;
+    }
+    result->value = std::get<std::string>(previous().value);
+    return result;
+}
+
+std::shared_ptr<Node> Parser::literal() {
+    if (check(Token::Type::Identifier)) {
+        return identifier();
+    } else if (check(Token::Type::NumericLiteral)) {
+        return numeric_literal();
+    } else if (check(Token::Type::StringLiteral)) {
+        return string_literal();
+    }
+    error("expected literal");
+    return nullptr;
 }
 
 bool Parser::match(std::vector<Token::Type> types) {
@@ -449,6 +588,10 @@ bool Parser::check(Token::Type type) {
     return current().type == type;
 }
 
+bool Parser::check_any_of(std::vector<Token::Type> types) {
+    return std::any_of(types.begin(), types.end(), [&](Token::Type type) { return current().type == type; });
+}
+
 Token Parser::previous() {
     if (m_i == 0) {
         return Token { Token::Type::StartOfUnit, "", m_tokens[m_i].line };
@@ -466,13 +609,139 @@ Token Parser::peek() {
 }
 
 void Parser::error(const std::string& what) {
-    std::cout << "error: line " << current().line << ": " << what << "\n";
+    if (m_errors) {
+        std::cout << "error: line " << current().line << ": " << what << std::endl;
+    }
 }
 
 void Parser::error_expected(Token::Type expected) {
     std::stringstream ss;
-    ss << "expected " << expected << " (between " << previous().type << " and " << peek().type << "), instead got " << current().type << "\n";
+    ss << "expected " << expected << " (between " << previous().type << " and " << peek().type << "), instead got " << current().type;
+    error(ss.str());
 }
+
+static inline std::string indent(size_t level) {
+    std::string result;
+    for (size_t i = 0; i < level; ++i) {
+        if (i % 2 == 0) {
+            result += "|";
+        }
+        result += " ";
+    }
+    return result;
+}
+
+std::string Statement::to_string(size_t level) {
+    return "Statement\n" + indent(level) + statement->to_string(level + 1);
+}
+
+std::string Expression::to_string(size_t level) {
+    return "Expression\n" + indent(level) + term->to_string(level + 1);
+}
+
+std::string Term::to_string(size_t level) {
+    std::string res = "Term\n";
+    for (size_t i = 0; i < factors.size(); ++i) {
+        if ((i + 1) % 2 == 0) {
+            res += indent(level) + "operator " + operators.at(i - 1) + "\n";
+        }
+        res += indent(level) + factors.at(i)->to_string(level + 1);
+    }
+    return res;
+}
+
+std::string Factor::to_string(size_t level) {
+    std::string res = "Factor\n";
+    for (size_t i = 0; i < unaries.size(); ++i) {
+        if ((i + 1) % 2 == 0) {
+            res += indent(level) + "operator " + operators.at(i - 1) + "\n";
+        }
+        res += indent(level) + unaries.at(i)->to_string(level + 1);
+    }
+    return res;
+}
+
+std::string Unary::to_string(size_t level) {
+    return "Unary\n" + indent(level) + op + unary_or_primary->to_string(level + 1);
+}
+
+std::string Primary::to_string(size_t level) {
+    return "Primary\n" + indent(level) + value->to_string(level + 1);
+}
+
+std::string GroupedExpression::to_string(size_t level) {
+    return "GroupedExpression\n" + indent(level) + expression->to_string(level + 1);
+}
+
+std::string Assignment::to_string(size_t level) {
+    std::string res = "Assignment\n";
+    res += indent(level) + identifier->to_string(level + 1);
+    res += indent(level) + expression->to_string(level + 1);
+    return res;
+}
+
+std::string Statements::to_string(size_t level) {
+    std::string res = "Statements\n";
+    for (auto& statement : statements) {
+        res += indent(level) + statement->to_string(level + 1);
+    }
+    return res;
+}
+
+std::string Body::to_string(size_t level) {
+    std::string res = "Body\n";
+    res += indent(level) + statements->to_string(level + 1);
+    return res;
+}
+
+std::string Identifier::to_string(size_t) {
+    return "Identifier: " + name + "\n";
+}
+
+std::string Typename::to_string(size_t) {
+    return "Typename: " + name + "\n";
+}
+
+std::string NumericLiteral::to_string(size_t) {
+    return "NumericLiteral: " + std::to_string(value) + "\n";
+}
+
+std::string StringLiteral::to_string(size_t) {
+    return "StringLiteral: \"" + value + "\"" + "\n";
+}
+
+std::string VariableDecl::to_string(size_t level) {
+    std::string res = "VariableDecl\n";
+    res += indent(level) + type_name->to_string(level + 1);
+    res += indent(level) + identifier->to_string(level + 1);
+    return res;
+}
+
+std::string VariableDeclList::to_string(size_t level) {
+    std::string res = "VariableDeclList\n";
+    for (auto& variable : variables) {
+        res += indent(level) + variable->to_string(level + 1);
+    }
+    return res;
+}
+
+std::string FunctionDecl::to_string(size_t level) {
+    std::string res = "Function\n";
+    res += indent(level) + name->to_string(level + 1);
+    res += indent(level) + "Arguments: " + arguments->to_string(level + 1);
+    res += indent(level) + "Result: " + result->to_string(level + 1);
+    res += indent(level) + body->to_string(level + 1);
+    return res;
+}
+
+std::string Unit::to_string(size_t level) {
+    std::string res = "Unit\n";
+    for (auto& fn : decls) {
+        res += indent(level) + fn->to_string(level + 1);
+    }
+    return res;
+}
+
 }
 
 int main(int, char**) {
@@ -494,6 +763,7 @@ int main(int, char**) {
                 ++iter;
             } else {
                 tok.type = Token::Type::MinusOperator;
+                tok.value = *iter;
             }
         } else if (std::isalpha(*iter)) { // identifer
             auto end = std::find_if_not(iter, source.end(), [](char c) { return std::isalnum(c); });
@@ -502,6 +772,7 @@ int main(int, char**) {
                 tok.type = Token::Type::FnKeyword;
             } else if (std::find(typenames.begin(), typenames.end(), str) != typenames.end()) {
                 tok.type = Token::Type::Typename;
+                tok.value = str;
             } else {
                 tok.type = Token::Type::Identifier;
                 tok.value = str;
@@ -519,10 +790,13 @@ int main(int, char**) {
             tok.type = Token::Type::Equals;
         } else if (*iter == '+') {
             tok.type = Token::Type::PlusOperator;
+            tok.value = *iter;
         } else if (*iter == '*') {
             tok.type = Token::Type::MultiplyOperator;
+            tok.value = *iter;
         } else if (*iter == '/') {
             tok.type = Token::Type::DivideOperator;
+            tok.value = *iter;
         } else if (std::isdigit(*iter)) { // numeric literal
             auto end = std::find_if_not(iter, source.end(), [](char c) { return std::isdigit(c); });
             auto str = std::string(iter, end);
@@ -548,7 +822,6 @@ int main(int, char**) {
             std::cout << line << ": error: couldn't parse: " << std::string(&*iter) << "\n";
             continue;
         }
-        std::cout << line << ": adding token: " << size_t(tok.type) << "\n";
         tokens.push_back(std::move(tok));
     }
     size_t last_line = 1;
@@ -622,5 +895,5 @@ int main(int, char**) {
     // syntax check
     AST::Parser parser(tokens);
     auto tree = parser.unit();
-    std::cout << "done!\n";
+    std::cout << tree->to_string(1) << std::endl;
 }
