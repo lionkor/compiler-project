@@ -7,6 +7,7 @@ function_declaration        -> 'fn' IDENTIFIER '(' ?variable_declaration_list ')
 body                        -> '{' statement * '}'
 
 statement                   -> assignment ';'
+                            | function_call ';'
 
 assignment                  -> IDENTIFIER '=' expression
 
