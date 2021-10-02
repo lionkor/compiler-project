@@ -14,7 +14,7 @@
 
 class Compiler {
 public:
-    Compiler(std::shared_ptr<AST::Unit> root);
+    Compiler(const std::shared_ptr<AST::Unit>& root);
     bool compile(const std::string& original_filename);
 
 private:
@@ -252,7 +252,7 @@ static bool fork_exec(const std::string& command) {
     return system(command.c_str()) == 0;
 }
 
-Compiler::Compiler(std::shared_ptr<AST::Unit> root)
+Compiler::Compiler(const std::shared_ptr<AST::Unit>& root)
     : m_root(root) {
 }
 
