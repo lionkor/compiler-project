@@ -32,15 +32,18 @@ private:
     bool compile_expression(const std::shared_ptr<AST::Expression>&, std::string& out_result_reg);
     bool compile_term(const std::shared_ptr<AST::Term>&, std::string& out_result_reg);
     bool compile_operation(const std::string& op, const std::string& left, const std::string& right, std::string& out_reg);
-    bool compile_function_call(AST::FunctionCall*);
+    bool compile_function_call(AST::FunctionCall*, std::string& out);
     bool compile_factor(const std::shared_ptr<AST::Factor>&, std::string& out_reg);
     bool compile_unary(const std::shared_ptr<AST::Unary>&, std::string& out);
 
     void add_comment(const std::string& comment, bool do_indent = true);
+    void add_newline();
     void add_label(const std::string& label);
     void add_instr_ret(const std::string& from);
     void add_instr_mov(const std::string& to, const std::string& from);
     void add_instr_lea(const std::string& to, const std::string& operation);
+    void add_push_callee_saved_registers();
+    void add_pop_callee_saved_registers();
 
     std::string tab() const { return "\t"; }
     std::string newline() const { return "\n"; }
@@ -271,8 +274,7 @@ bool Compiler::compile(const std::string& original_filename) {
     auto outfile_name = std::filesystem::path(original_filename).stem().string() + ".asm";
     std::ofstream outfile(outfile_name);
     outfile << "global _start\n"
-            << "section .text\n\n"
-            << "\n";
+            << "section .text\n";
     outfile << finalize();
     outfile << custom_start << "\n";
     std::cout << "info: written program to \"" << outfile_name << "\".\n";
@@ -340,6 +342,7 @@ bool Compiler::compile_unit(const std::shared_ptr<AST::Unit>& unit) {
 }
 
 bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& decl) {
+    m_current_reg = 0;
     if (decl->result) {
         m_identifier_register_map[decl->result->identifier->name] = "rax";
     }
@@ -348,14 +351,18 @@ bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& d
             register_identifier(arg->identifier->name);
         }
     }
+    add_newline();
     add_comment(generate_signature(decl), false);
     add_label(decl->name->name);
+    add_instr_mov("rax", "0xdeadbeef");
+    add_push_callee_saved_registers();
     for (const auto& statement : decl->body->statements->statements) {
         bool ok = compile_statement(statement);
         if (!ok) {
             return false;
         }
     }
+    add_pop_callee_saved_registers();
     add_instr_ret(decl->name->name);
     return true;
 }
@@ -367,7 +374,9 @@ bool Compiler::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
             return false;
         }
     } else if (auto fncall = dynamic_cast<AST::FunctionCall*>(stmt->statement.get())) {
-        bool ok = compile_function_call(fncall);
+        std::string ignored_result;
+        // TODO: warn ^
+        bool ok = compile_function_call(fncall, ignored_result);
         if (!ok) {
             return false;
         }
@@ -402,13 +411,14 @@ bool Compiler::compile_term(const std::shared_ptr<AST::Term>& term, std::string&
     }
     for (size_t i = 1; i < term->factors.size(); ++i) {
         std::string right;
-        ok = compile_factor(term->factors.at(++i), right);
+        ok = compile_factor(term->factors.at(i), right);
         if (!ok) {
             return false;
         }
         compile_operation(term->operators.at(i - 1), next_res, right, next_res);
     }
-    add_instr_mov(out_result_reg, next_res);
+    // add_instr_mov(out_result_reg, next_res);
+    out_result_reg = next_res;
     return true;
 }
 
@@ -416,32 +426,30 @@ bool Compiler::compile_operation(const std::string& op, const std::string& left,
     if (op == "/") {
         assert(!"not implemented: operator '/'");
     }
-    out_reg = next_register();
-    add_instr_lea(out_reg, "[" + left + std::string(op) + right + "]");
+    auto new_out = next_register();
+    add_instr_lea(new_out, "[" + left + std::string(op) + right + "]");
+    out_reg = new_out;
     return true;
 }
 
-bool Compiler::compile_function_call(AST::FunctionCall* fncall) {
-    error("not implemented fncall");
-    return true;
+bool Compiler::compile_function_call(AST::FunctionCall* fncall, std::string& out) {
+    // TODO: look up & verify signature here
 }
 
 bool Compiler::compile_factor(const std::shared_ptr<AST::Factor>& factor, std::string& out_reg) {
-    out_reg = next_register();
-    std::string next_res;
-    bool ok = compile_unary(factor->unaries.at(0), next_res);
+    bool ok = compile_unary(factor->unaries.at(0), out_reg);
     if (!ok) {
         return false;
     }
     for (size_t i = 1; i < factor->unaries.size(); ++i) {
         std::string right;
-        ok = compile_unary(factor->unaries.at(++i), right);
+        ok = compile_unary(factor->unaries.at(i), right);
         if (!ok) {
             return false;
         }
-        compile_operation(factor->operators.at(i - 1), next_res, right, next_res);
+        compile_operation(factor->operators.at(i - 1), out_reg, right, out_reg);
     }
-    add_instr_mov(out_reg, next_res);
+    //add_instr_mov(out_reg, next_res);
     return true;
 }
 
@@ -461,8 +469,7 @@ bool Compiler::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::stri
         } else if (auto grouped_expression = dynamic_cast<AST::GroupedExpression*>(primary->value.get())) {
             return compile_expression(grouped_expression->expression, out);
         } else if (auto fncall = dynamic_cast<AST::FunctionCall*>(primary->value.get())) {
-            assert(!"not implemented");
-            // return compile_function_call();
+            return compile_function_call(fncall, out);
         } else {
             assert(!"unreachable code reached");
         }
@@ -477,6 +484,10 @@ void Compiler::add_comment(const std::string& comment, bool do_indent) {
         m_asm << tab();
     }
     m_asm << "; " << comment << newline();
+}
+
+void Compiler::add_newline() {
+    m_asm << newline();
 }
 
 void Compiler::add_label(const std::string& label) {
@@ -494,6 +505,26 @@ void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
 
 void Compiler::add_instr_lea(const std::string& to, const std::string& operation) {
     m_asm << tab() << "lea " << to << ", " << operation << newline();
+}
+
+void Compiler::add_push_callee_saved_registers() {
+    m_asm << tab() << "push rbx" << newline()
+          << tab() << "push rsp" << newline()
+          << tab() << "push rbp" << newline()
+          << tab() << "push r12" << newline()
+          << tab() << "push r13" << newline()
+          << tab() << "push r14" << newline()
+          << tab() << "push r15" << newline();
+}
+
+void Compiler::add_pop_callee_saved_registers() {
+    m_asm << tab() << "pop r15" << newline()
+          << tab() << "pop r14" << newline()
+          << tab() << "pop r13" << newline()
+          << tab() << "pop r12" << newline()
+          << tab() << "pop rbp" << newline()
+          << tab() << "pop rsp" << newline()
+          << tab() << "pop rbx" << newline();
 }
 
 void Compiler::error(const std::string& what) {
