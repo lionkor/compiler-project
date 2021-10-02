@@ -55,7 +55,8 @@ private:
 
     std::shared_ptr<AST::Unit> m_root { nullptr };
     size_t m_current_reg { 0 };
-    std::vector<std::string> m_asm;
+    std::vector<std::string> m_asm_text;
+    std::vector<std::string> m_asm_data;
     size_t m_current_stack_ptr { 0 };
     std::unordered_map<std::string, size_t> m_identifier_stack_addr_map;
 
@@ -152,7 +153,7 @@ int main(int argc, char** argv) {
                 continue;
             }
             tok.type = Token::Type::StringLiteral;
-            tok.value = std::string(iter + 1, end - 1);
+            tok.value = std::string(iter + 1, end);
             iter = end;
         } else {
             std::cout << line << ": error: couldn't parse: " << std::string(&*iter) << "\n";
@@ -275,13 +276,25 @@ bool Compiler::compile(const std::string& original_filename) {
 
     auto outfile_name = std::filesystem::path(original_filename).stem().string() + ".asm";
     std::ofstream outfile(outfile_name);
-    outfile << "global _start\n"
-            << "section .text\n";
-    outfile << R"(
-syscall:
+    outfile << "global _start\n";
+    outfile << "\nsection .data\n";
+
+    for (const auto& line : m_asm_data) {
+        outfile << line << "\n";
+    }
+
+    outfile << "\nsection .text\n";
+    outfile << R"(syscall:
+	mov rax, rdi
+	mov rdi, rsi
+	mov rsi, rdx
+	mov rdx, rcx
+	mov r10, r8
+	mov r8, r9
 	syscall
 )";
-    for (const auto& line : m_asm) {
+    // TODO syscall missing one argument
+    for (const auto& line : m_asm_text) {
         outfile << line << "\n";
     }
     outfile << custom_start << "\n";
@@ -359,7 +372,7 @@ bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& d
     add_push_callee_saved_registers();
     add_instr("push rbp");
     add_instr("mov rbp, rsp");
-    size_t fn_start_index = m_asm.size();
+    size_t fn_start_index = m_asm_text.size();
     std::string return_value_storage = "0";
     if (decl->result) {
         auto offset = register_identifier(decl->result->identifier->name, 8);
@@ -389,7 +402,7 @@ bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& d
     add_instr_mov("rax", return_value_storage);
     add_instr("leave");
     add_instr_ret(decl->name->name);
-    m_asm.insert(m_asm.begin() + fn_start_index, tab() + "sub rsp, " + std::to_string(m_current_stack_ptr));
+    m_asm_text.insert(m_asm_text.begin() + fn_start_index, tab() + "sub rsp, " + std::to_string(m_current_stack_ptr));
     return true;
 }
 
@@ -511,8 +524,34 @@ bool Compiler::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::stri
     if (auto primary = dynamic_cast<AST::Primary*>(unary->unary_or_primary.get())) {
         if (auto numeric_literal = dynamic_cast<AST::NumericLiteral*>(primary->value.get())) {
             out = std::to_string(numeric_literal->value);
-        } else if (auto numeric_literal = dynamic_cast<AST::StringLiteral*>(primary->value.get())) {
-            assert(!"not implemented");
+        } else if (auto string_literal = dynamic_cast<AST::StringLiteral*>(primary->value.get())) {
+            // TODO: escape newlines, etc.
+            std::string final_string;
+            for (size_t i = 0; i < string_literal->value.size(); ++i) {
+                if (string_literal->value[i] == '\\' && i + 1 < string_literal->value.size()) {
+                    char c = string_literal->value[i + 1];
+                    switch (c) {
+                    case 'n':
+                        final_string += "', 0xa, '";
+                        break;
+                    case '\\':
+                        final_string += c;
+                        break;
+                    default:
+                        std::cout << "warning: unhandled escaped string '" + std::to_string(c) + "'.";
+                        break;
+                    }
+                    ++i;
+                } else if (string_literal->value[i] == '\'') {
+                    final_string += "', 0x27, '";
+                } else {
+                    final_string += string_literal->value[i];
+                }
+            }
+            auto identifier = "__str_" + std::to_string(m_asm_data.size() / 2);
+            m_asm_data.push_back(tab() + identifier + "_size: dq " + std::to_string(string_literal->value.size()));
+            m_asm_data.push_back(tab() + identifier + ": db '" + final_string + "', 0x0");
+            out = identifier;
         } else if (auto identifier = dynamic_cast<AST::Identifier*>(primary->value.get())) {
             out = "rbp-" + std::to_string(get_address_for_identifier(identifier->name));
         } else if (auto grouped_expression = dynamic_cast<AST::GroupedExpression*>(primary->value.get())) {
@@ -534,24 +573,24 @@ void Compiler::add_comment(const std::string& comment, bool do_indent) {
         line += tab();
     }
     line += "; " + comment;
-    m_asm.push_back(line);
+    m_asm_text.push_back(line);
 }
 
 void Compiler::add_newline() {
-    m_asm.push_back("");
+    m_asm_text.push_back("");
 }
 
 void Compiler::add_label(const std::string& label) {
-    m_asm.push_back(label + ":");
+    m_asm_text.push_back(label + ":");
 }
 
 void Compiler::add_instr(const std::string& instr) {
-    m_asm.push_back(tab() + instr);
+    m_asm_text.push_back(tab() + instr);
 }
 
 void Compiler::add_instr_ret(const std::string& from) {
     add_comment("return from " + from);
-    m_asm.push_back(tab() + "ret");
+    m_asm_text.push_back(tab() + "ret");
 }
 
 void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
@@ -563,7 +602,7 @@ void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
     if (from.substr(0, 3) == "rbp") {
         real_from = "qword [" + real_from + "]";
     }
-    m_asm.push_back(tab() + "mov " + real_to + ", " + real_from);
+    m_asm_text.push_back(tab() + "mov " + real_to + ", " + real_from);
 }
 
 // TODO: this needs to be a function that gets called by add and mov, since they're the same.
@@ -576,7 +615,7 @@ void Compiler::add_instr_add(const std::string& to, const std::string& from) {
     if (from.substr(0, 3) == "rbp") {
         real_from = "qword [" + real_from + "]";
     }
-    m_asm.push_back(tab() + "add " + real_to + ", " + real_from);
+    m_asm_text.push_back(tab() + "add " + real_to + ", " + real_from);
 }
 
 void Compiler::add_instr_sub(const std::string& a, const std::string& b) {
@@ -588,7 +627,7 @@ void Compiler::add_instr_sub(const std::string& a, const std::string& b) {
     if (b.substr(0, 3) == "rbp") {
         real_b = "qword [" + real_b + "]";
     }
-    m_asm.push_back(tab() + "sub " + real_a + ", " + real_b);
+    m_asm_text.push_back(tab() + "sub " + real_a + ", " + real_b);
 }
 
 void Compiler::add_instr_mul(const std::string& a, const std::string& b) {
@@ -600,15 +639,15 @@ void Compiler::add_instr_mul(const std::string& a, const std::string& b) {
     if (b.substr(0, 3) == "rbp") {
         real_b = "qword [" + real_b + "]";
     }
-    m_asm.push_back(tab() + "imul " + real_a + ", " + real_b);
+    m_asm_text.push_back(tab() + "imul " + real_a + ", " + real_b);
 }
 
 void Compiler::add_instr_lea(const std::string& to, const std::string& operation) {
-    m_asm.push_back(tab() + "lea " + to + ", " + operation);
+    m_asm_text.push_back(tab() + "lea " + to + ", " + operation);
 }
 
 void Compiler::add_instr_call(const std::string& label) {
-    m_asm.push_back(tab() + "call " + label);
+    m_asm_text.push_back(tab() + "call " + label);
 }
 
 void Compiler::add_push_callee_saved_registers() {
