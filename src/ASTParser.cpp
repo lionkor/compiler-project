@@ -122,6 +122,8 @@ std::shared_ptr<Statement> Parser::statement() {
     auto result = std::make_shared<Statement>();
     if (check(Token::Type::Identifier) && peek().type == Token::Type::OpeningParentheses) {
         result->statement = function_call();
+    } else if (check(Token::Type::Typename)) {
+        result->statement = variable_decl();
     } else {
         result->statement = assignment();
     }
@@ -542,4 +544,3 @@ std::string FunctionCall::to_string(size_t level) {
     }
     return res;
 }
-

@@ -1,8 +1,6 @@
-fn add(i64 a, i64 b) -> i64 c {
-    c = a + b;
-}
-
 fn main() -> i64 ret {
-    ret = add(1, 2) + add(add(0, 1), add(add(1, 0), 15));
+    i64 str;
+    str = "Hello!\n";
+    ret = std_syscall(1,0, str, str-8);
 }
 

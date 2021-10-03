@@ -21,7 +21,8 @@ private:
     bool compile_unit(const std::shared_ptr<AST::Unit>&);
     bool compile_function_decl(const std::shared_ptr<AST::FunctionDecl>&);
     bool compile_statement(const std::shared_ptr<AST::Statement>&);
-    bool compile_assignment(AST::Assignment*);
+    bool compile_variable_decl(const AST::VariableDecl*);
+    bool compile_assignment(const AST::Assignment*);
     bool compile_expression(const std::shared_ptr<AST::Expression>&, std::string& out_result_reg);
     bool compile_term(const std::shared_ptr<AST::Term>&, std::string& out_result_reg);
     bool compile_operation(const std::string& op, const std::string& left, const std::string& right, std::string& out_reg);
@@ -43,7 +44,7 @@ private:
     void add_push_callee_saved_registers();
     void add_pop_callee_saved_registers();
 
-    std::string tab() const { return "\t"; }
+    std::string tab() const { return "    "; }
 
     void error(const std::string& what);
 
@@ -161,73 +162,6 @@ int main(int argc, char** argv) {
         }
         tokens.push_back(std::move(tok));
     }
-    /* size_t last_line = 1;
-    for (const auto& tok : tokens) {
-        if (tok.line > last_line) {
-            std::cout << "\n";
-            last_line = tok.line;
-        }
-        switch (tok.type) {
-        case Token::Type::EndOfUnit:
-            assert(!"not reachable");
-            break;
-        case Token::Type::StartOfUnit:
-            assert(!"not reachable");
-            break;
-        case Token::Type::FnKeyword:
-            std::cout << "fn ";
-            break;
-        case Token::Type::ArrowOperator:
-            std::cout << "->";
-            break;
-        case Token::Type::Typename:
-            std::cout << "type ";
-            break;
-        case Token::Type::Equals:
-            std::cout << "=";
-            break;
-        case Token::Type::OpeningBrace:
-            std::cout << "{";
-            break;
-        case Token::Type::ClosingBrace:
-            std::cout << "}";
-            break;
-        case Token::Type::PlusOperator:
-            std::cout << "+";
-            break;
-        case Token::Type::MinusOperator:
-            std::cout << "-";
-            break;
-        case Token::Type::MultiplyOperator:
-            std::cout << "*";
-            break;
-        case Token::Type::DivideOperator:
-            std::cout << "/";
-            break;
-        case Token::Type::Comma:
-            std::cout << ",";
-            break;
-        case Token::Type::Identifier:
-            std::cout << "id";
-            break;
-        case Token::Type::OpeningParentheses:
-            std::cout << "(";
-            break;
-        case Token::Type::ClosingParentheses:
-            std::cout << ")";
-            break;
-        case Token::Type::NumericLiteral:
-            std::cout << "num";
-            break;
-        case Token::Type::StringLiteral:
-            std::cout << "string";
-            break;
-        case Token::Type::Semicolon:
-            std::cout << ";";
-            break;
-        }
-    }
-    std::cout << std::endl;*/
 
     std::cout << "info: counted " << line - 1 << " lines.\n";
     std::cout << "info: parsed " << tokens.size() << " tokens.\n";
@@ -247,22 +181,19 @@ int main(int argc, char** argv) {
     compiler.compile(argv[1]);
 }
 
-static bool fork_exec(const std::string& command) {
-    std::cout << "info: executing: `" << command << "`\n";
-    return system(command.c_str()) == 0;
-}
-
 Compiler::Compiler(const std::shared_ptr<AST::Unit>& root)
     : m_root(root) {
 }
 
+constexpr const char* libasm = R"(
+; libasm
+%include "asm/globals.asm"
+%include "asm/lib.asm"
+)";
+
 constexpr const char* custom_start = R"(
 ; core language _start
-_start:
-	call main
-	mov rdi, rax
-	mov rax, 60
-	syscall
+%include "asm/_start.asm"
 )";
 
 bool Compiler::compile(const std::string& original_filename) {
@@ -275,41 +206,41 @@ bool Compiler::compile(const std::string& original_filename) {
     }
 
     auto outfile_name = std::filesystem::path(original_filename).stem().string() + ".asm";
-    std::ofstream outfile(outfile_name);
-    outfile << "global _start\n";
-    outfile << "\nsection .data\n";
+    { // ofstream scope
+        std::ofstream outfile(outfile_name);
+        outfile << "global _start\n";
+        outfile << "\nsection .data\n";
 
-    for (const auto& line : m_asm_data) {
-        outfile << line << "\n";
+        for (const auto& line : m_asm_data) {
+            outfile << line << "\n";
+        }
+
+        outfile << "\nsection .text\n";
+        outfile << libasm;
+
+        // TODO syscall missing one argument
+        for (const auto& line : m_asm_text) {
+            outfile << line << "\n";
+        }
+        outfile << custom_start << "\n";
+        std::cout << "info: written program to \"" << outfile_name << "\".\n";
     }
 
-    outfile << "\nsection .text\n";
-    outfile << R"(syscall:
-	mov rax, rdi
-	mov rdi, rsi
-	mov rsi, rdx
-	mov rdx, rcx
-	mov r10, r8
-	mov r8, r9
-	syscall
-)";
-    // TODO syscall missing one argument
-    for (const auto& line : m_asm_text) {
-        outfile << line << "\n";
-    }
-    outfile << custom_start << "\n";
-    std::cout << "info: written program to \"" << outfile_name << "\".\n";
-
-    /*
     auto stem = std::filesystem::path(original_filename).stem().string();
-    if (!fork_exec("/usr/bin/nasm -s -Wall -felf64 " + stem + ".asm")) {
+    std::string command = "nasm " + stem + ".asm -o " + stem + ".o -Wall -g -felf64 -I.";
+    std::cout << "running: " << command << "\n";
+    std::cout.flush();
+    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
         std::cout << "nasm failed\n";
         return false;
     }
-    if (!fork_exec("/usr/bin/ld -o " + stem + " " + stem + ".o")) {
+    command = "ld -o " + stem + " " + stem + ".o";
+    std::cout << "running: " << command << "\n";
+    std::cout.flush();
+    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
         std::cout << "ld failed\n";
         return false;
-    }*/
+    }
     return true;
 }
 
@@ -419,6 +350,11 @@ bool Compiler::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
         if (!ok) {
             return false;
         }
+    } else if (auto decl = dynamic_cast<AST::VariableDecl*>(stmt->statement.get())) {
+        bool ok = compile_variable_decl(decl);
+        if (!ok) {
+            return false;
+        }
     } else {
         error("statement is neither assignment nor function call.");
         return false;
@@ -426,7 +362,13 @@ bool Compiler::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
     return true;
 }
 
-bool Compiler::compile_assignment(AST::Assignment* assignment) {
+bool Compiler::compile_variable_decl(const AST::VariableDecl* decl) {
+    auto addr = register_identifier(decl->identifier->name, 8);
+    add_comment("rbp-" + std::to_string(addr) + " = " + decl->type_name->name + " " + decl->identifier->name);
+    return true;
+}
+
+bool Compiler::compile_assignment(const AST::Assignment* assignment) {
     std::string expr_result;
     bool ok = compile_expression(assignment->expression, expr_result);
     add_comment(assignment->identifier->name + " = " + expr_result);

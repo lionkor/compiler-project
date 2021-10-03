@@ -8,6 +8,7 @@ body                        -> '{' statement * '}'
 
 statement                   -> assignment ';'
                             | function_call ';'
+                            | variable_declaration ';'
 
 assignment                  -> IDENTIFIER '=' expression
 
