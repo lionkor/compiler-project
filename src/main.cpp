@@ -427,14 +427,25 @@ bool Compiler::compile_operation(const std::string& op, const std::string& left,
 }
 
 bool Compiler::compile_function_call(AST::FunctionCall* fncall, std::string& out) {
-    // TODO: look up & verify signature here
+    add_comment("setup arguments to " + fncall->name->name + "()");
+    std::vector<std::string> arg_stack;
+    arg_stack.reserve(fncall->arguments.size());
     size_t i = 0;
     for (const auto& arg : fncall->arguments) {
+        std::string arg_stack_element = "rbp-" + std::to_string(make_stack_ptr_for_size(8));
         std::string expr_out;
         compile_expression(arg, expr_out);
-        add_instr_mov(m_arg_registers[i], expr_out);
+        add_comment(fncall->name->name + "() arg " + std::to_string(i) + " is " + arg_stack_element);
+        add_instr_mov(arg_stack_element, expr_out);
+        arg_stack.push_back(arg_stack_element);
         ++i;
     }
+    i = 0;
+    for (const auto& arg : arg_stack) {
+        add_instr_mov(m_arg_registers[i], arg);
+        ++i;
+    }
+    add_comment("call to " + fncall->name->name + "()");
     add_instr_call(fncall->name->name);
     out = "rax";
     return true;
@@ -538,13 +549,26 @@ void Compiler::add_instr_ret(const std::string& from) {
 void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
     std::string real_to = to;
     std::string real_from = from;
+    int i = 0;
     if (to.substr(0, 3) == "rbp") {
         real_to = "qword [" + real_to + "]";
+        ++i;
     }
     if (from.substr(0, 3) == "rbp") {
         real_from = "qword [" + real_from + "]";
+        ++i;
+    }
+    if (i > 1) {
+        // we cannot have `mov <mem>, <mem>` so we need to use two instructions
+        add_comment(from + " -> rax -> " + to);
+        add_instr("push rax");
+        add_instr_mov("rax", real_from);
+        real_from = "rax";
     }
     m_asm_text.push_back(tab() + "mov " + real_to + ", " + real_from);
+    if (i > 1) {
+        add_instr("pop rax");
+    }
 }
 
 // TODO: this needs to be a function that gets called by add and mov, since they're the same.
