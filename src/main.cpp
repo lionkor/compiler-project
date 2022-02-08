@@ -255,7 +255,6 @@ constexpr const char* libasm_decl = R"(
 
 constexpr const char* libasm = R"(
 ; libasm
-%include "asm/globals.asm"
 %include "asm/lib.asm"
 )";
 

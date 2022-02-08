@@ -1,7 +1,7 @@
 global _start
 
 section .data
-	; externs from dependency "lib/std/print.o"
+	; externs from dependency "std/print.o"
 	extern std_print
 	; own globals
 	global main
@@ -19,7 +19,7 @@ section .text
 main:
     push rbp
     mov rbp, rsp
-    sub rsp, 48
+    sub rsp, 56
     ; rbp-8 = ret
     ; setting rbp-8 to debug value
     mov rax, 0xdeadc0de
@@ -30,15 +30,17 @@ main:
     ; str = __str_0
     mov qword [rbp-24], __str_0
     ; setup arguments to std_print()
-    ; std_print() arg 0 is rbp-40
-    ; rbp-24 -> rax -> rbp-40
+    ; std_print() arg 0 is rbp-48
+    ; rbp-24 -> rax -> rbp-48
     push rax
     mov rax, qword [rbp-24]
-    mov qword [rbp-40], rax
+    mov qword [rbp-48], rax
     pop rax
-    mov rdi, qword [rbp-40]
+    mov rdi, qword [rbp-48]
     ; call to std_print()
     call std_print
+    ; ret = rax
+    mov qword [rbp-8], rax
     mov rax, qword [rbp-8]
     leave
     ; return from main

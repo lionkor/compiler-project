@@ -1,9 +1,9 @@
-use "lib/std/print";
+use "std/print";
 
 fn main() -> i64 ret {
     ret = 0;
     i64 str;
     str = "Hello!, sweet world\n";
-    std_print(str);
+    ret = std_print(str);
 }
 
