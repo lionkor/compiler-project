@@ -26,6 +26,7 @@ struct Unary;
 struct Primary;
 struct GroupedExpression;
 struct FunctionCall;
+struct UseDecl;
 
 struct Node {
     virtual ~Node() { }
@@ -133,6 +134,12 @@ struct FunctionDecl : public Node {
 
 struct Unit : public Node {
     std::vector<std::shared_ptr<FunctionDecl>> decls;
+    std::vector<std::shared_ptr<UseDecl>> use_decls;
+    virtual std::string to_string(size_t level);
+};
+
+struct UseDecl : public Node {
+    std::string path;
     virtual std::string to_string(size_t level);
 };
 
@@ -160,6 +167,7 @@ public:
     std::shared_ptr<NumericLiteral> numeric_literal();
     std::shared_ptr<StringLiteral> string_literal();
     std::shared_ptr<Typename> type_name();
+    std::shared_ptr<UseDecl> use_decl();
 
     size_t error_count() const { return m_error_count; }
     void errors_off() { m_errors_enabled = false; }

@@ -1,4 +1,4 @@
-use std/print;
+use "lib/std/print";
 
 fn main() -> i64 ret {
     ret = 0;

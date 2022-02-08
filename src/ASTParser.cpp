@@ -1,5 +1,7 @@
 #include "ASTParser.h"
 
+#include <lk/Logger.h>
+
 #include <algorithm>
 #include <cerrno>
 #include <charconv>
@@ -20,11 +22,20 @@ std::shared_ptr<Unit> Parser::unit() {
         if (peek().type == Token::Type::EndOfUnit) {
             break;
         }
-        fn = function_decl();
-        if (fn) {
-            result->decls.push_back(fn);
+        if (current().type == Token::Type::UseKeyword) {
+            auto use = use_decl();
+            if (use) {
+                result->use_decls.push_back(use);
+            } else {
+                break;
+            }
         } else {
-            break;
+            fn = function_decl();
+            if (fn) {
+                result->decls.push_back(fn);
+            } else {
+                break;
+            }
         }
     }
     return result;
@@ -321,6 +332,18 @@ std::shared_ptr<Typename> Parser::type_name() {
     return result;
 }
 
+std::shared_ptr<UseDecl> Parser::use_decl() {
+    auto result = std::make_shared<UseDecl>();
+    if (!match({ Token::Type::UseKeyword, Token::Type::StringLiteral })) {
+        return nullptr;
+    }
+    result->path = std::get<std::string>(previous().value);
+    if (!match({ Token::Type::Semicolon })) {
+        return nullptr;
+    }
+    return result;
+}
+
 std::shared_ptr<NumericLiteral> Parser::numeric_literal() {
     auto result = std::make_shared<NumericLiteral>();
     if (!match({ Token::Type::NumericLiteral })) {
@@ -392,7 +415,7 @@ Token Parser::peek() {
 void Parser::error(const std::string& what) {
     if (m_errors_enabled) {
         ++m_error_count;
-        std::cout << "error: line " << current().line << ": " << what << std::endl;
+        lk::log::error() << "error: line " << current().line << ": " << what << std::endl;
     }
 }
 
@@ -529,6 +552,9 @@ std::string FunctionDecl::to_string(size_t level) {
 
 std::string Unit::to_string(size_t level) {
     std::string res = "Unit\n";
+    for (auto& use : use_decls) {
+        res += indent(level) + use->to_string(level + 1);
+    }
     for (auto& fn : decls) {
         res += indent(level) + fn->to_string(level + 1);
     }
@@ -542,5 +568,10 @@ std::string FunctionCall::to_string(size_t level) {
     for (const auto& arg : arguments) {
         res += indent(level + 1) + arg->to_string(level + 2);
     }
+    return res;
+}
+
+std::string UseDecl::to_string(size_t) {
+    std::string res = "UseDecl: \"" + path + "\"\n";
     return res;
 }

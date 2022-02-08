@@ -10,14 +10,18 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <sys/wait.h>
 #include <unistd.h>
 
-class Compiler {
+class Object {
 public:
-    Compiler(const std::shared_ptr<AST::Unit>& root);
-    bool compile(const std::string& original_filename);
+    Object(const std::shared_ptr<AST::Unit>& root);
+    bool compile(const std::string& original_filename, bool standalone);
+
+    const std::vector<std::unique_ptr<Object>>& dependencies() const;
+    const std::string& obj_file() const;
 
 private:
     bool compile_unit(const std::shared_ptr<AST::Unit>&);
@@ -31,6 +35,7 @@ private:
     bool compile_function_call(AST::FunctionCall*, std::string& out);
     bool compile_factor(const std::shared_ptr<AST::Factor>&, std::string& out_reg);
     bool compile_unary(const std::shared_ptr<AST::Unary>&, std::string& out);
+    bool compile_use_decl(const std::shared_ptr<AST::UseDecl>& unit);
 
     void add_comment(const std::string& comment, bool do_indent = true);
     void add_newline();
@@ -63,6 +68,9 @@ private:
     size_t m_current_stack_ptr { 0 };
     std::unordered_map<std::string, size_t> m_identifier_stack_addr_map;
 
+    std::vector<std::unique_ptr<Object>> m_dependencies;
+    std::string m_obj_file;
+
     static inline const std::string m_arg_registers[] = { "rdi", "rsi", "rdx", "rcx", "r8", "r9" };
 };
 
@@ -73,6 +81,15 @@ inline bool is_instance_of(const std::shared_ptr<T>&) {
 
 static std::vector<Token> tokenize(const std::string& source);
 
+static std::unique_ptr<Object> compile_source_to_obj(const std::string filename, bool standalone, bool debug = true);
+
+static void add_objs_from_obj(const Object& obj, std::unordered_set<std::string>& objs) {
+    objs.insert(obj.obj_file());
+    for (const auto& dependency : obj.dependencies()) {
+        add_objs_from_obj(*dependency, objs);
+    }
+}
+
 int main(int argc, char** argv) {
     lk::Logger::the().add_stream(std::cout);
     lk::Logger::the().add_file_stream("compiler.log");
@@ -81,13 +98,37 @@ int main(int argc, char** argv) {
         lk::log::error() << argv[0] << ": missing argument" << std::endl;
         return 1;
     }
-    FILE* file = std::fopen(argv[1], "r");
+
+    auto obj = compile_source_to_obj(argv[1], true);
+
+    lk::log::info() << "linking " << obj->obj_file() << " with " << obj->dependencies().size() << " dependencies..." << std::endl;
+
+    std::string src = argv[1];
+    std::string final = (std::filesystem::path(src).parent_path() / std::filesystem::path(src).stem()).string();
+
+    std::unordered_set<std::string> objs;
+    add_objs_from_obj(*obj, objs);
+
+    std::string link_command = "ld -o " + final;
+    for (const auto& name : objs) {
+        link_command += " " + name;
+    }
+
+    lk::log::info() << "running: " << link_command << std::endl;
+    if (WEXITSTATUS(std::system(link_command.c_str())) != 0) {
+        lk::log::error() << "ld failed\n";
+        return -1;
+    }
+}
+
+static std::unique_ptr<Object> compile_source_to_obj(const std::string path, bool standalone, bool debug) {
+    FILE* file = std::fopen(path.data(), "r");
     if (!file) {
-        lk::log::error() << argv[0] << ": failed to open \"" << argv[1] << "\": " << std::strerror(errno) << "\n";
-        return 1;
+        lk::log::error() << "failed to open \"" << path << "\": " << std::strerror(errno) << "\n";
+        return nullptr;
     }
     std::string source;
-    source.resize(std::filesystem::file_size(argv[1]));
+    source.resize(std::filesystem::file_size(path));
     std::fread(source.data(), 1, source.size(), file);
     std::fclose(file);
 
@@ -97,16 +138,21 @@ int main(int argc, char** argv) {
     // syntax check
     AST::Parser parser(tokens);
     auto tree = parser.unit();
-    if (argc > 2 && std::string(argv[2]) == "-d") {
-        lk::log::debug() << tree->to_string(1) << std::endl;
+    if (debug) {
+        lk::log::debug() << "\n"
+                         << tree->to_string(1) << std::endl;
     }
     lk::log::info() << "syntax parser had " << parser.error_count() << " errors." << std::endl;
     if (parser.error_count() > 0) {
-        return parser.error_count();
+        return nullptr;
     }
 
-    Compiler compiler(tree);
-    compiler.compile(argv[1]);
+    auto object = std::make_unique<Object>(tree);
+    if (!object->compile(path, standalone)) {
+        lk::log::error() << "failed to compile \"" << path << "\"" << std::endl;
+        return nullptr;
+    }
+    return object;
 }
 
 static std::vector<Token> tokenize(const std::string& source) {
@@ -133,6 +179,8 @@ static std::vector<Token> tokenize(const std::string& source) {
             auto str = std::string(iter, end);
             if (str == "fn") {
                 tok.type = Token::Type::FnKeyword;
+            } else if (str == "use") {
+                tok.type = Token::Type::UseKeyword;
             } else if (std::find(typenames.begin(), typenames.end(), str) != typenames.end()) {
                 tok.type = Token::Type::Typename;
                 tok.value = str;
@@ -163,7 +211,7 @@ static std::vector<Token> tokenize(const std::string& source) {
         } else if (std::isdigit(*iter)) { // numeric literal
             auto end = std::find_if_not(iter, source.end(), [](char c) { return std::isdigit(c); });
             auto str = std::string(iter, end);
-            size_t value;
+            size_t value {};
             std::from_chars(iter.base(), end.base(), value);
             tok.type = Token::Type::NumericLiteral;
             tok.value = value;
@@ -194,13 +242,17 @@ static std::vector<Token> tokenize(const std::string& source) {
     return tokens;
 }
 
-Compiler::Compiler(const std::shared_ptr<AST::Unit>& root)
+Object::Object(const std::shared_ptr<AST::Unit>& root)
     : m_root(root) {
 }
 
+constexpr const char* libasm_decl = R"(
+; all globals, asm decls
+%include "asm/globals.asm"
+)";
+
 constexpr const char* libasm = R"(
 ; libasm
-%include "asm/globals.asm"
 %include "asm/lib.asm"
 )";
 
@@ -209,7 +261,7 @@ constexpr const char* custom_start = R"(
 %include "asm/_start.asm"
 )";
 
-bool Compiler::compile(const std::string& original_filename) {
+bool Object::compile(const std::string& original_filename, bool standalone) {
     assert(m_root);
 
     bool ok = compile_unit(m_root);
@@ -218,10 +270,14 @@ bool Compiler::compile(const std::string& original_filename) {
         return false;
     }
 
-    auto outfile_name = std::filesystem::path(original_filename).stem().string() + ".asm";
+    auto stem = std::filesystem::path(original_filename).parent_path() / std::filesystem::path(original_filename).stem();
+
+    auto outfile_name = stem.string() + ".asm";
     { // ofstream scope
         std::ofstream outfile(outfile_name);
-        outfile << "global _start\n";
+        if (standalone) {
+            outfile << "global _start\n";
+        }
         outfile << "\nsection .data\n";
 
         for (const auto& line : m_asm_data) {
@@ -229,39 +285,39 @@ bool Compiler::compile(const std::string& original_filename) {
         }
 
         outfile << "\nsection .text\n";
-        outfile << libasm;
+        outfile << libasm_decl;
+        if (standalone) {
+            outfile << libasm;
+        }
 
         // TODO syscall missing one argument
         for (const auto& line : m_asm_text) {
             outfile << line << "\n";
         }
-        outfile << custom_start << "\n";
-        lk::log::info() << "written program to \"" << outfile_name << "\".\n";
+        if (standalone) {
+            outfile << custom_start << "\n";
+        }
     }
 
-    auto stem = std::filesystem::path(original_filename).stem().string();
-    std::string command = "nasm " + stem + ".asm -o " + stem + ".o -Wall -g -felf64 -I.";
-    lk::log::info() << "running: " << command << std::endl;
-    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
-        lk::log::info() << "nasm failed\n";
-        return false;
-    }
-    command = "nasm " + stem + ".asm -o " + stem + ".out.asm -Wall -g -felf64 -I. -E";
-    lk::log::info() << "running: " << command << std::endl;
-    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
+    m_obj_file = stem.string() + ".o";
+    std::string compile_cmd = "nasm " + stem.string() + ".asm -o " + m_obj_file + ".asm -Wall -g -felf64 -I. -E";
+    lk::log::info() << "running: " << compile_cmd << std::endl;
+    if (WEXITSTATUS(std::system(compile_cmd.c_str())) != 0) {
         lk::log::info() << "nasm -E failed\n";
         return false;
     }
-    command = "ld -o " + stem + " " + stem + ".o";
-    lk::log::info() << "running: " << command << std::endl;
-    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
-        lk::log::info() << "ld failed\n";
+    std::string debug_compile_cmd = "nasm " + stem.string() + ".asm -o " + m_obj_file + " -Wall -g -felf64 -I.";
+    lk::log::info() << "running: " << debug_compile_cmd << std::endl;
+    if (WEXITSTATUS(std::system(debug_compile_cmd.c_str())) != 0) {
+        lk::log::info() << "nasm failed\n";
         return false;
     }
+
+    lk::log::info() << "successfully compiled \"" << original_filename << "\" to \"" << m_obj_file << "\"" << std::endl;
     return true;
 }
 
-bool Compiler::is_identifier_known(const std::string& id) {
+bool Object::is_identifier_known(const std::string& id) {
     return std::find_if(m_identifier_stack_addr_map.begin(), m_identifier_stack_addr_map.end(),
                [&](const auto& pair) -> bool {
                    return pair.first == id;
@@ -269,11 +325,11 @@ bool Compiler::is_identifier_known(const std::string& id) {
         != m_identifier_stack_addr_map.end();
 }
 
-size_t Compiler::get_address_for_identifier(const std::string& id) {
+size_t Object::get_address_for_identifier(const std::string& id) {
     return m_identifier_stack_addr_map.at(id);
 }
 
-std::string Compiler::generate_signature(const std::shared_ptr<AST::FunctionDecl>& func) {
+std::string Object::generate_signature(const std::shared_ptr<AST::FunctionDecl>& func) {
     std::string res = "fn " + func->name->name;
     res += "(";
     if (func->arguments) {
@@ -291,17 +347,41 @@ std::string Compiler::generate_signature(const std::shared_ptr<AST::FunctionDecl
     return res;
 }
 
-size_t Compiler::register_identifier(const std::string& id, size_t size) {
+size_t Object::register_identifier(const std::string& id, size_t size) {
     auto addr = make_stack_ptr_for_size(size);
     m_identifier_stack_addr_map[id] = addr;
     return addr;
 }
 
-size_t Compiler::make_stack_ptr_for_size(size_t size) {
+size_t Object::make_stack_ptr_for_size(size_t size) {
     return m_current_stack_ptr += size;
 }
 
-bool Compiler::compile_unit(const std::shared_ptr<AST::Unit>& unit) {
+const std::string& Object::obj_file() const {
+    return m_obj_file;
+}
+
+const std::vector<std::unique_ptr<Object>>& Object::dependencies() const {
+    return m_dependencies;
+}
+
+bool Object::compile_use_decl(const std::shared_ptr<AST::UseDecl>& unit) {
+    auto ptr = compile_source_to_obj(unit->path + ".xc", false);
+    if (!ptr) {
+        lk::log::error() << "failed to compile dependency \"" << unit->path << "\"" << std::endl;
+        return false;
+    }
+    m_dependencies.emplace_back(std::move(ptr));
+    return true;
+}
+
+bool Object::compile_unit(const std::shared_ptr<AST::Unit>& unit) {
+    for (const auto& use_decl : unit->use_decls) {
+        bool ok = compile_use_decl(use_decl);
+        if (!ok) {
+            return false;
+        }
+    }
     for (const auto& function_decl : unit->decls) {
         bool ok = compile_function_decl(function_decl);
         if (!ok) {
@@ -311,7 +391,7 @@ bool Compiler::compile_unit(const std::shared_ptr<AST::Unit>& unit) {
     return true;
 }
 
-bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& decl) {
+bool Object::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& decl) {
     m_current_reg = 0;
     m_current_stack_ptr = 0;
     add_newline();
@@ -327,7 +407,7 @@ bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& d
         return_value_storage = "rbp-" + std::to_string(offset);
         add_comment(return_value_storage + " = " + decl->result->identifier->name);
         add_comment("setting " + return_value_storage + " to debug value");
-        add_instr_mov("rax", "0xdeadbeef");
+        add_instr_mov("rax", "0xdeadc0de");
         add_instr_mov(return_value_storage, "rax");
     }
     if (decl->arguments) {
@@ -354,7 +434,7 @@ bool Compiler::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& d
     return true;
 }
 
-bool Compiler::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
+bool Object::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
     if (auto assignment = dynamic_cast<AST::Assignment*>(stmt->statement.get())) {
         bool ok = compile_assignment(assignment);
         if (!ok) {
@@ -379,13 +459,13 @@ bool Compiler::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
     return true;
 }
 
-bool Compiler::compile_variable_decl(const AST::VariableDecl* decl) {
+bool Object::compile_variable_decl(const AST::VariableDecl* decl) {
     auto addr = register_identifier(decl->identifier->name, 8);
     add_comment("rbp-" + std::to_string(addr) + " = " + decl->type_name->name + " " + decl->identifier->name);
     return true;
 }
 
-bool Compiler::compile_assignment(const AST::Assignment* assignment) {
+bool Object::compile_assignment(const AST::Assignment* assignment) {
     std::string expr_result;
     bool ok = compile_expression(assignment->expression, expr_result);
     add_comment(assignment->identifier->name + " = " + expr_result);
@@ -397,11 +477,11 @@ bool Compiler::compile_assignment(const AST::Assignment* assignment) {
     return true;
 }
 
-bool Compiler::compile_expression(const std::shared_ptr<AST::Expression>& expr, std::string& out_result_reg) {
+bool Object::compile_expression(const std::shared_ptr<AST::Expression>& expr, std::string& out_result_reg) {
     return compile_term(expr->term, out_result_reg);
 }
 
-bool Compiler::compile_term(const std::shared_ptr<AST::Term>& term, std::string& out_result_reg) {
+bool Object::compile_term(const std::shared_ptr<AST::Term>& term, std::string& out_result_reg) {
     out_result_reg = "rbp-" + std::to_string(make_stack_ptr_for_size(8));
     std::string next_res;
     bool ok = compile_factor(term->factors.at(0), next_res);
@@ -421,7 +501,7 @@ bool Compiler::compile_term(const std::shared_ptr<AST::Term>& term, std::string&
     return true;
 }
 
-bool Compiler::compile_operation(const std::string& op, const std::string& left, const std::string& right, std::string& out_reg) {
+bool Object::compile_operation(const std::string& op, const std::string& left, const std::string& right, std::string& out_reg) {
     if (op == "/") {
         assert(!"not implemented: operator '/'");
     }
@@ -443,7 +523,7 @@ bool Compiler::compile_operation(const std::string& op, const std::string& left,
     return true;
 }
 
-bool Compiler::compile_function_call(AST::FunctionCall* fncall, std::string& out) {
+bool Object::compile_function_call(AST::FunctionCall* fncall, std::string& out) {
     add_comment("setup arguments to " + fncall->name->name + "()");
     std::vector<std::string> arg_stack;
     arg_stack.reserve(fncall->arguments.size());
@@ -468,7 +548,7 @@ bool Compiler::compile_function_call(AST::FunctionCall* fncall, std::string& out
     return true;
 }
 
-bool Compiler::compile_factor(const std::shared_ptr<AST::Factor>& factor, std::string& out_reg) {
+bool Object::compile_factor(const std::shared_ptr<AST::Factor>& factor, std::string& out_reg) {
     bool ok = compile_unary(factor->unaries.at(0), out_reg);
     if (!ok) {
         return false;
@@ -485,7 +565,7 @@ bool Compiler::compile_factor(const std::shared_ptr<AST::Factor>& factor, std::s
     return true;
 }
 
-bool Compiler::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::string& out) {
+bool Object::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::string& out) {
     if (!unary->op.empty()) {
         assert(unary->op == "-");
         assert(!"not implemented");
@@ -537,7 +617,7 @@ bool Compiler::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::stri
     return true;
 }
 
-void Compiler::add_comment(const std::string& comment, bool do_indent) {
+void Object::add_comment(const std::string& comment, bool do_indent) {
     std::string line;
     if (do_indent) {
         line += tab();
@@ -546,24 +626,24 @@ void Compiler::add_comment(const std::string& comment, bool do_indent) {
     m_asm_text.push_back(line);
 }
 
-void Compiler::add_newline() {
+void Object::add_newline() {
     m_asm_text.push_back("");
 }
 
-void Compiler::add_label(const std::string& label) {
+void Object::add_label(const std::string& label) {
     m_asm_text.push_back(label + ":");
 }
 
-void Compiler::add_instr(const std::string& instr) {
+void Object::add_instr(const std::string& instr) {
     m_asm_text.push_back(tab() + instr);
 }
 
-void Compiler::add_instr_ret(const std::string& from) {
+void Object::add_instr_ret(const std::string& from) {
     add_comment("return from " + from);
     m_asm_text.push_back(tab() + "ret");
 }
 
-void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
+void Object::add_instr_mov(const std::string& to, const std::string& from) {
     std::string real_to = to;
     std::string real_from = from;
     int i = 0;
@@ -589,7 +669,7 @@ void Compiler::add_instr_mov(const std::string& to, const std::string& from) {
 }
 
 // TODO: this needs to be a function that gets called by add and mov, since they're the same.
-void Compiler::add_instr_add(const std::string& to, const std::string& from) {
+void Object::add_instr_add(const std::string& to, const std::string& from) {
     std::string real_to = to;
     std::string real_from = from;
     if (to.substr(0, 3) == "rbp") {
@@ -601,7 +681,7 @@ void Compiler::add_instr_add(const std::string& to, const std::string& from) {
     m_asm_text.push_back(tab() + "add " + real_to + ", " + real_from);
 }
 
-void Compiler::add_instr_sub(const std::string& a, const std::string& b) {
+void Object::add_instr_sub(const std::string& a, const std::string& b) {
     std::string real_a = a;
     std::string real_b = b;
     if (a.substr(0, 3) == "rbp") {
@@ -613,7 +693,7 @@ void Compiler::add_instr_sub(const std::string& a, const std::string& b) {
     m_asm_text.push_back(tab() + "sub " + real_a + ", " + real_b);
 }
 
-void Compiler::add_instr_mul(const std::string& a, const std::string& b) {
+void Object::add_instr_mul(const std::string& a, const std::string& b) {
     std::string real_a = a;
     std::string real_b = b;
     if (a.substr(0, 3) == "rbp") {
@@ -625,20 +705,20 @@ void Compiler::add_instr_mul(const std::string& a, const std::string& b) {
     m_asm_text.push_back(tab() + "imul " + real_a + ", " + real_b);
 }
 
-void Compiler::add_instr_lea(const std::string& to, const std::string& operation) {
+void Object::add_instr_lea(const std::string& to, const std::string& operation) {
     m_asm_text.push_back(tab() + "lea " + to + ", " + operation);
 }
 
-void Compiler::add_instr_call(const std::string& label) {
+void Object::add_instr_call(const std::string& label) {
     m_asm_text.push_back(tab() + "call " + label);
 }
 
-void Compiler::add_push_callee_saved_registers() {
+void Object::add_push_callee_saved_registers() {
 }
 
-void Compiler::add_pop_callee_saved_registers() {
+void Object::add_pop_callee_saved_registers() {
 }
 
-void Compiler::error(const std::string& what) {
+void Object::error(const std::string& what) {
     lk::log::error() << "compiler: " << what << "\n";
 }

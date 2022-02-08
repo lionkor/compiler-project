@@ -6,8 +6,10 @@ section .data
 
 section .text
 
-; libasm
+; all globals, asm decls
 %include "asm/globals.asm"
+
+; libasm
 %include "asm/lib.asm"
 
 ; fn main()->i64 ret
@@ -17,27 +19,27 @@ main:
     sub rsp, 112
     ; rbp-8 = ret
     ; setting rbp-8 to debug value
-    mov rax, 0xdeadbeef
+    mov rax, 0xdeadc0de
     mov qword [rbp-8], rax
-    ; rbp-16 = i64 str
     ; ret = 0
     mov qword [rbp-8], 0
+    ; rbp-24 = i64 str
     ; str = __str_0
-    mov qword [rbp-16], __str_0
+    mov qword [rbp-24], __str_0
     ; setup arguments to std_syscall()
     ; std_syscall() arg 0 is rbp-40
     mov qword [rbp-40], 1
     ; std_syscall() arg 1 is rbp-56
     mov qword [rbp-56], 0
     ; std_syscall() arg 2 is rbp-72
-    ; rbp-16 -> rax -> rbp-72
+    ; rbp-24 -> rax -> rbp-72
     push rax
-    mov rax, qword [rbp-16]
+    mov rax, qword [rbp-24]
     mov qword [rbp-72], rax
     pop rax
     ; setup arguments to deref()
-    ; rbx = rbp-16 - 8
-    mov rax, qword [rbp-16]
+    ; rbx = rbp-24 - 8
+    mov rax, qword [rbp-24]
     sub rax, 8
     mov rbx, rax
     ; deref() arg 0 is rbp-104

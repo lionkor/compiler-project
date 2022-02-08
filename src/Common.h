@@ -25,6 +25,7 @@ struct Token {
         MinusOperator,
         MultiplyOperator,
         DivideOperator,
+        UseKeyword,
         // special types!
         EndOfUnit,
         StartOfUnit,
@@ -91,6 +92,10 @@ static inline std::ostream& operator<<(std::ostream& os, const Token::Type& type
         break;
     case Token::Type::StartOfUnit:
         os << "start of unit";
+        break;
+    case Token::Type::UseKeyword:
+        os << "keyword 'use'";
+        break;
     }
     return os;
 }
