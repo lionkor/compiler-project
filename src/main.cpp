@@ -183,6 +183,10 @@ static std::vector<Token> tokenize(const std::string& source) {
                 tok.type = Token::Type::FnKeyword;
             } else if (str == "use") {
                 tok.type = Token::Type::UseKeyword;
+            } else if (str == "if") {
+                tok.type = Token::Type::IfKeyword;
+            } else if (str == "else") {
+                tok.type = Token::Type::ElseKeyword;
             } else if (std::find(typenames.begin(), typenames.end(), str) != typenames.end()) {
                 tok.type = Token::Type::Typename;
                 tok.value = str;

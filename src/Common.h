@@ -41,6 +41,12 @@ static inline std::ostream& operator<<(std::ostream& os, const Token::Type& type
     case Token::Type::FnKeyword:
         os << "keyword 'fn'";
         break;
+    case Token::Type::IfKeyword:
+        os << "keyword 'if'";
+        break;
+    case Token::Type::ElseKeyword:
+        os << "keyword 'else'";
+        break;
     case Token::Type::ArrowOperator:
         os << "operator '->'";
         break;
