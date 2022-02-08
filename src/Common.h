@@ -26,6 +26,8 @@ struct Token {
         MultiplyOperator,
         DivideOperator,
         UseKeyword,
+        IfKeyword,
+        ElseKeyword,
         // special types!
         EndOfUnit,
         StartOfUnit,

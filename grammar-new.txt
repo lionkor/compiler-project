@@ -41,3 +41,9 @@ typename                    -> 'i64'
                             | 'bool'
                             | 'u64'
                             | 'char'
+
+if_statement                -> 'if' '(' expression ')' body ?else_statement
+
+else_statement              -> 'else' body
+
+use_declaration             -> 'use' STRING_LITERAL ';'
