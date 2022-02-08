@@ -1,6 +1,8 @@
 #include "ASTParser.h"
 #include "Common.h"
 
+#include <lk/Logger.h>
+
 #include <cassert>
 #include <charconv>
 #include <cstring>
@@ -69,14 +71,19 @@ inline bool is_instance_of(const std::shared_ptr<T>&) {
     return std::is_base_of<Base, T>::value;
 }
 
+static std::vector<Token> tokenize(const std::string& source);
+
 int main(int argc, char** argv) {
+    lk::Logger::the().add_stream(std::cout);
+    lk::Logger::the().add_file_stream("compiler.log");
+
     if (argc < 2) {
-        std::cout << argv[0] << ": missing argument" << std::endl;
+        lk::log::error() << argv[0] << ": missing argument" << std::endl;
         return 1;
     }
     FILE* file = std::fopen(argv[1], "r");
     if (!file) {
-        std::cout << argv[0] << ": failed to open \"" << argv[1] << "\": " << std::strerror(errno) << "\n";
+        lk::log::error() << argv[0] << ": failed to open \"" << argv[1] << "\": " << std::strerror(errno) << "\n";
         return 1;
     }
     std::string source;
@@ -84,7 +91,25 @@ int main(int argc, char** argv) {
     std::fread(source.data(), 1, source.size(), file);
     std::fclose(file);
 
-    std::cout << "info: loaded source of size " << source.size() << " bytes.\n";
+    lk::log::info() << "loaded source of size " << source.size() << " bytes.\n";
+
+    auto tokens = tokenize(source);
+    // syntax check
+    AST::Parser parser(tokens);
+    auto tree = parser.unit();
+    if (argc > 2 && std::string(argv[2]) == "-d") {
+        lk::log::debug() << tree->to_string(1) << std::endl;
+    }
+    lk::log::info() << "syntax parser had " << parser.error_count() << " errors." << std::endl;
+    if (parser.error_count() > 0) {
+        return parser.error_count();
+    }
+
+    Compiler compiler(tree);
+    compiler.compile(argv[1]);
+}
+
+static std::vector<Token> tokenize(const std::string& source) {
     std::vector<Token> tokens;
     size_t line = 1;
     for (auto iter = source.begin(); iter != source.end() && *iter; ++iter) {
@@ -150,35 +175,23 @@ int main(int argc, char** argv) {
         } else if (*iter == '"') {
             auto end = std::find_if(iter + 1, source.end(), [](char c) { return c == '"'; });
             if (end == source.end()) {
-                std::cout << line << ": end of file before end of string literal!\n";
+                lk::log::warning() << line << ": end of file before end of string literal!\n";
                 continue;
             }
             tok.type = Token::Type::StringLiteral;
             tok.value = std::string(iter + 1, end);
             iter = end;
         } else {
-            std::cout << line << ": error: couldn't parse: " << std::string(&*iter) << "\n";
+            lk::log::error() << line << ": couldn't parse: " << std::string(&*iter) << "\n";
             continue;
         }
         tokens.push_back(std::move(tok));
     }
 
-    std::cout << "info: counted " << line - 1 << " lines.\n";
-    std::cout << "info: parsed " << tokens.size() << " tokens.\n";
+    lk::log::info() << "counted " << line - 1 << " lines.\n";
+    lk::log::info() << "parsed " << tokens.size() << " tokens.\n";
 
-    // syntax check
-    AST::Parser parser(tokens);
-    auto tree = parser.unit();
-    if (argc > 2 && std::string(argv[2]) == "-d") {
-        //std::cout << tree->to_string(1) << std::endl;
-    }
-    std::cout << "info: syntax parser had " << parser.error_count() << " errors." << std::endl;
-    if (parser.error_count() > 0) {
-        return parser.error_count();
-    }
-
-    Compiler compiler(tree);
-    compiler.compile(argv[1]);
+    return tokens;
 }
 
 Compiler::Compiler(const std::shared_ptr<AST::Unit>& root)
@@ -201,7 +214,7 @@ bool Compiler::compile(const std::string& original_filename) {
 
     bool ok = compile_unit(m_root);
     if (!ok) {
-        std::cout << "error: compilation failed.\n";
+        lk::log::error() << "compilation failed.\n";
         return false;
     }
 
@@ -223,22 +236,26 @@ bool Compiler::compile(const std::string& original_filename) {
             outfile << line << "\n";
         }
         outfile << custom_start << "\n";
-        std::cout << "info: written program to \"" << outfile_name << "\".\n";
+        lk::log::info() << "written program to \"" << outfile_name << "\".\n";
     }
 
     auto stem = std::filesystem::path(original_filename).stem().string();
     std::string command = "nasm " + stem + ".asm -o " + stem + ".o -Wall -g -felf64 -I.";
-    std::cout << "running: " << command << "\n";
-    std::cout.flush();
+    lk::log::info() << "running: " << command << std::endl;
     if (WEXITSTATUS(std::system(command.c_str())) != 0) {
-        std::cout << "nasm failed\n";
+        lk::log::info() << "nasm failed\n";
+        return false;
+    }
+    command = "nasm " + stem + ".asm -o " + stem + ".out.asm -Wall -g -felf64 -I. -E";
+    lk::log::info() << "running: " << command << std::endl;
+    if (WEXITSTATUS(std::system(command.c_str())) != 0) {
+        lk::log::info() << "nasm -E failed\n";
         return false;
     }
     command = "ld -o " + stem + " " + stem + ".o";
-    std::cout << "running: " << command << "\n";
-    std::cout.flush();
+    lk::log::info() << "running: " << command << std::endl;
     if (WEXITSTATUS(std::system(command.c_str())) != 0) {
-        std::cout << "ld failed\n";
+        lk::log::info() << "ld failed\n";
         return false;
     }
     return true;
@@ -464,7 +481,7 @@ bool Compiler::compile_factor(const std::shared_ptr<AST::Factor>& factor, std::s
         }
         compile_operation(factor->operators.at(i - 1), out_reg, right, out_reg);
     }
-    //add_instr_mov(out_reg, next_res);
+    // add_instr_mov(out_reg, next_res);
     return true;
 }
 
@@ -491,7 +508,7 @@ bool Compiler::compile_unary(const std::shared_ptr<AST::Unary>& unary, std::stri
                         final_string += c;
                         break;
                     default:
-                        std::cout << "warning: unhandled escaped string '" + std::to_string(c) + "'.";
+                        lk::log::info() << "warning: unhandled escaped string '" + std::to_string(c) + "'.";
                         break;
                     }
                     ++i;
@@ -623,5 +640,5 @@ void Compiler::add_pop_callee_saved_registers() {
 }
 
 void Compiler::error(const std::string& what) {
-    std::cout << "error: compiler: " << what << "\n";
+    lk::log::error() << "compiler: " << what << "\n";
 }

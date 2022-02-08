@@ -1,8 +1,8 @@
 global _start
 
 section .data
-    __str_0_size: dq 8
-    __str_0: db 'Hello!', 0xa, '', 0x0
+    __str_0_size: dq 21
+    __str_0: db 'Hello!, sweet world', 0xa, '', 0x0
 
 section .text
 
@@ -20,6 +20,8 @@ main:
     mov rax, 0xdeadbeef
     mov qword [rbp-8], rax
     ; rbp-16 = i64 str
+    ; ret = 0
+    mov qword [rbp-8], 0
     ; str = __str_0
     mov qword [rbp-16], __str_0
     ; setup arguments to std_syscall()
@@ -51,8 +53,6 @@ main:
     mov rcx, qword [rbp-88]
     ; call to std_syscall()
     call std_syscall
-    ; ret = rax
-    mov qword [rbp-8], rax
     mov rax, qword [rbp-8]
     leave
     ; return from main
