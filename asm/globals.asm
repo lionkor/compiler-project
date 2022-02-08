@@ -1,2 +1,5 @@
 global _start
-global std_syscall
+
+extern std_syscall
+extern deref
+extern ref

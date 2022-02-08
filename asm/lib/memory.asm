@@ -3,7 +3,7 @@ deref:
     mov rax, [rdi]
     ret
 
-; fn addr(any rdi) -> any* rax
-addr:
+; fn ref(any rdi) -> any* rax
+ref:
     lea rax, [rdi]
     ret

@@ -22,6 +22,7 @@ public:
 
     const std::vector<std::unique_ptr<Object>>& dependencies() const;
     const std::string& obj_file() const;
+    const std::vector<std::string>& globals() const;
 
 private:
     bool compile_unit(const std::shared_ptr<AST::Unit>&);
@@ -68,6 +69,7 @@ private:
     size_t m_current_stack_ptr { 0 };
     std::unordered_map<std::string, size_t> m_identifier_stack_addr_map;
 
+    std::vector<std::string> m_globals;
     std::vector<std::unique_ptr<Object>> m_dependencies;
     std::string m_obj_file;
 
@@ -280,6 +282,21 @@ bool Object::compile(const std::string& original_filename, bool standalone) {
         }
         outfile << "\nsection .data\n";
 
+        // write all known globals of dependencies
+        for (const auto& dep : dependencies()) {
+            outfile << "\t; externs from dependency \"" << dep->obj_file() << "\"\n";
+            for (const auto& global : dep->globals()) {
+                outfile << "\textern " << global << "\n";
+            }
+        }
+
+        // write own globals
+        outfile << "\t; own globals\n";
+        for (const auto& global : globals()) {
+            outfile << "\tglobal " << global << "\n";
+        }
+
+        outfile << "\t; own data\n";
         for (const auto& line : m_asm_data) {
             outfile << line << "\n";
         }
@@ -357,6 +374,10 @@ size_t Object::make_stack_ptr_for_size(size_t size) {
     return m_current_stack_ptr += size;
 }
 
+const std::vector<std::string>& Object::globals() const {
+    return m_globals;
+}
+
 const std::string& Object::obj_file() const {
     return m_obj_file;
 }
@@ -394,6 +415,7 @@ bool Object::compile_unit(const std::shared_ptr<AST::Unit>& unit) {
 bool Object::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& decl) {
     m_current_reg = 0;
     m_current_stack_ptr = 0;
+    m_globals.push_back(decl->name->name);
     add_newline();
     add_comment(generate_signature(decl), false);
     add_label(decl->name->name);
