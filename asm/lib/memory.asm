@@ -1,3 +1,6 @@
+global deref
+global ref
+
 ; fn addr(any* rdi) -> any rax
 deref:
     mov rax, [rdi]

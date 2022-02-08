@@ -250,11 +250,12 @@ Object::Object(const std::shared_ptr<AST::Unit>& root)
 
 constexpr const char* libasm_decl = R"(
 ; all globals, asm decls
-%include "asm/globals.asm"
+%include "asm/extern.asm"
 )";
 
 constexpr const char* libasm = R"(
 ; libasm
+%include "asm/globals.asm"
 %include "asm/lib.asm"
 )";
 
@@ -302,9 +303,10 @@ bool Object::compile(const std::string& original_filename, bool standalone) {
         }
 
         outfile << "\nsection .text\n";
-        outfile << libasm_decl;
         if (standalone) {
             outfile << libasm;
+        } else {
+            outfile << libasm_decl;
         }
 
         // TODO syscall missing one argument
