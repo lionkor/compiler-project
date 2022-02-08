@@ -1,0 +1,3 @@
+[submodule "deps/liblk"]
+	path = deps/liblk
+	url = https://gitlab.com/lionkor/liblk
