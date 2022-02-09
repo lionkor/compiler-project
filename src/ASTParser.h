@@ -2,10 +2,10 @@
 
 #include "Common.h"
 
-#include <memory>
-#include <vector>
-#include <string>
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace AST {
 
@@ -27,6 +27,8 @@ struct Primary;
 struct GroupedExpression;
 struct FunctionCall;
 struct UseDecl;
+struct IfStatement;
+struct ElseStatement;
 
 struct Node {
     virtual ~Node() { }
@@ -143,6 +145,18 @@ struct UseDecl : public Node {
     virtual std::string to_string(size_t level);
 };
 
+struct IfStatement : public Node {
+    std::shared_ptr<Expression> condition;
+    std::shared_ptr<Body> body;
+    std::shared_ptr<ElseStatement> else_statement;
+    virtual std::string to_string(size_t level);
+};
+
+struct ElseStatement : public Node {
+    std::shared_ptr<Body> body;
+    virtual std::string to_string(size_t level);
+};
+
 class Parser {
 public:
     Parser(const std::vector<Token>& tokens)
@@ -153,6 +167,8 @@ public:
     std::shared_ptr<VariableDeclList> variable_decl_list();
     std::shared_ptr<Body> body();
     std::shared_ptr<Statement> statement();
+    std::shared_ptr<IfStatement> if_statement();
+    std::shared_ptr<ElseStatement> else_statement();
     std::shared_ptr<Statements> statements();
     std::shared_ptr<Assignment> assignment();
     std::shared_ptr<Identifier> identifier();

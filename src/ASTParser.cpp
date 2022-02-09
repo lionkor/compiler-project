@@ -133,15 +133,60 @@ std::shared_ptr<Statement> Parser::statement() {
     auto result = std::make_shared<Statement>();
     if (check(Token::Type::Identifier) && peek().type == Token::Type::OpeningParentheses) {
         result->statement = function_call();
+        if (!match({ Token::Type::Semicolon })) {
+            return nullptr;
+        }
     } else if (check(Token::Type::Typename)) {
         result->statement = variable_decl();
+        if (!match({ Token::Type::Semicolon })) {
+            return nullptr;
+        }
+    } else if (check(Token::Type::IfKeyword)) {
+        result->statement = if_statement();
     } else {
         result->statement = assignment();
+        if (!match({ Token::Type::Semicolon })) {
+            return nullptr;
+        }
     }
     if (!result->statement) {
         return nullptr;
     }
-    if (!match({ Token::Type::Semicolon })) {
+    return result;
+}
+
+std::shared_ptr<IfStatement> Parser::if_statement() {
+    auto result = std::make_shared<IfStatement>();
+    if (!match({ Token::Type::IfKeyword, Token::Type::OpeningParentheses })) {
+        return nullptr;
+    }
+    result->condition = expression();
+    if (!result->condition) {
+        return nullptr;
+    }
+    if (!match({ Token::Type::ClosingParentheses })) {
+        return nullptr;
+    }
+    result->body = body();
+    if (!result->body) {
+        return nullptr;
+    }
+    if (check(Token::Type::ElseKeyword)) {
+        result->else_statement = else_statement();
+        if (!result->else_statement) {
+            return nullptr;
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<ElseStatement> Parser::else_statement() {
+    auto result = std::make_shared<ElseStatement>();
+    if (!match({ Token::Type::ElseKeyword })) {
+        return nullptr;
+    }
+    result->body = body();
+    if (!result->body) {
         return nullptr;
     }
     return result;
@@ -573,5 +618,22 @@ std::string FunctionCall::to_string(size_t level) {
 
 std::string UseDecl::to_string(size_t) {
     std::string res = "UseDecl: \"" + path + "\"\n";
+    return res;
+}
+
+std::string IfStatement::to_string(size_t level) {
+    std::string res = "IfStatement\n";
+    res += indent(level) + "Condition:\n";
+    res += indent(level + 1) + condition->to_string(level + 1);
+    res += indent(level) + body->to_string(level + 1);
+    if (else_statement) {
+        res += indent(level) + else_statement->to_string(level + 1);
+    }
+    return res;
+}
+
+std::string ElseStatement::to_string(size_t level) {
+    std::string res = "ElseStatement\n";
+    res += indent(level) + body->to_string(level + 1);
     return res;
 }
