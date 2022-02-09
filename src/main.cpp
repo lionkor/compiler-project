@@ -27,7 +27,10 @@ public:
 private:
     bool compile_unit(const std::shared_ptr<AST::Unit>&);
     bool compile_function_decl(const std::shared_ptr<AST::FunctionDecl>&);
+    bool compile_body(const std::shared_ptr<AST::Body>&);
     bool compile_statement(const std::shared_ptr<AST::Statement>&);
+    bool compile_if_statement(const AST::IfStatement*);
+    bool compile_else_statement(const std::shared_ptr<AST::ElseStatement>& stmt);
     bool compile_variable_decl(const AST::VariableDecl*);
     bool compile_assignment(const AST::Assignment*);
     bool compile_expression(const std::shared_ptr<AST::Expression>&, std::string& out_result_reg);
@@ -44,6 +47,7 @@ private:
     void add_instr(const std::string& instr);
     void add_instr_ret(const std::string& from);
     void add_instr_mov(const std::string& to, const std::string& from);
+    void add_instr_cmp(const std::string& a, const std::string& b);
     void add_instr_add(const std::string& to, const std::string& from);
     void add_instr_sub(const std::string& a, const std::string& b);
     void add_instr_mul(const std::string& a, const std::string& b);
@@ -61,6 +65,7 @@ private:
     std::string generate_signature(const std::shared_ptr<AST::FunctionDecl>& func);
     size_t register_identifier(const std::string& id, size_t size);
     size_t make_stack_ptr_for_size(size_t size);
+    std::string generate_unique_label();
 
     std::shared_ptr<AST::Unit> m_root { nullptr };
     size_t m_current_reg { 0 };
@@ -70,6 +75,7 @@ private:
     std::unordered_map<std::string, size_t> m_identifier_stack_addr_map;
 
     std::vector<std::string> m_globals;
+    size_t m_unique_label_i { 0 };
     std::vector<std::unique_ptr<Object>> m_dependencies;
     std::string m_obj_file;
 
@@ -183,6 +189,10 @@ static std::vector<Token> tokenize(const std::string& source) {
                 tok.type = Token::Type::FnKeyword;
             } else if (str == "use") {
                 tok.type = Token::Type::UseKeyword;
+            } else if (str == "if") {
+                tok.type = Token::Type::IfKeyword;
+            } else if (str == "else") {
+                tok.type = Token::Type::ElseKeyword;
             } else if (std::find(typenames.begin(), typenames.end(), str) != typenames.end()) {
                 tok.type = Token::Type::Typename;
                 tok.value = str;
@@ -375,6 +385,16 @@ size_t Object::make_stack_ptr_for_size(size_t size) {
     return m_current_stack_ptr += size;
 }
 
+std::string Object::generate_unique_label() {
+    std::string name = m_obj_file;
+    for (char& c : name) {
+        if (!isalnum(c)) {
+            c = '_';
+        }
+    }
+    return "__" + name + "_" + std::to_string(m_unique_label_i++);
+}
+
 const std::vector<std::string>& Object::globals() const {
     return m_globals;
 }
@@ -443,17 +463,25 @@ bool Object::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& dec
             ++i;
         }
     }
-    for (const auto& statement : decl->body->statements->statements) {
-        bool ok = compile_statement(statement);
-        if (!ok) {
-            return false;
-        }
+    bool ok = compile_body(decl->body);
+    if (!ok) {
+        return false;
     }
     add_pop_callee_saved_registers();
     add_instr_mov("rax", return_value_storage);
     add_instr("leave");
     add_instr_ret(decl->name->name);
     m_asm_text.insert(m_asm_text.begin() + fn_start_index, tab() + "sub rsp, " + std::to_string(m_current_stack_ptr));
+    return true;
+}
+
+bool Object::compile_body(const std::shared_ptr<AST::Body>& body) {
+    for (const auto& statement : body->statements->statements) {
+        bool ok = compile_statement(statement);
+        if (!ok) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -475,11 +503,57 @@ bool Object::compile_statement(const std::shared_ptr<AST::Statement>& stmt) {
         if (!ok) {
             return false;
         }
+    } else if (auto if_stmt = dynamic_cast<AST::IfStatement*>(stmt->statement.get())) {
+        bool ok = compile_if_statement(if_stmt);
+        if (!ok) {
+            return false;
+        }
     } else {
-        error("statement is neither assignment nor function call.");
+        error("statement is not assignment, function call, or if statement, but should be.");
         return false;
     }
     return true;
+}
+
+bool Object::compile_if_statement(const AST::IfStatement* stmt) {
+    std::string cond_result;
+    add_comment("condition of if-statement");
+    bool ok = compile_expression(stmt->condition, cond_result);
+    if (!ok) {
+        return false;
+    }
+    std::string else_label = generate_unique_label();
+    std::string end_label = generate_unique_label();
+    add_instr("push rax");
+    add_instr_mov("rax", cond_result);
+    add_instr_cmp("rax", "0");
+    add_instr("pop rax");
+    add_comment("jump to else/end");
+    add_instr("je " + else_label);
+    add_comment("if body");
+    ok = compile_body(stmt->body);
+    if (!ok) {
+        return false;
+    }
+    if (stmt->else_statement) {
+        add_comment("jump to end, past the else");
+        add_instr("jmp " + end_label);
+        add_label(else_label);
+        ok = compile_else_statement(stmt->else_statement);
+        if (!ok) {
+            return false;
+        }
+        add_label(end_label);
+    } else {
+        add_label(else_label);
+    }
+    return true;
+}
+
+bool Object::compile_else_statement(const std::shared_ptr<AST::ElseStatement>& stmt) {
+    add_comment("else body");
+    bool ok = compile_body(stmt->body);
+    return ok;
 }
 
 bool Object::compile_variable_decl(const AST::VariableDecl* decl) {
@@ -689,6 +763,18 @@ void Object::add_instr_mov(const std::string& to, const std::string& from) {
     if (i > 1) {
         add_instr("pop rax");
     }
+}
+
+void Object::add_instr_cmp(const std::string& a, const std::string& b) {
+    std::string real_a = a;
+    std::string real_b = b;
+    if (a.substr(0, 3) == "rbp") {
+        real_a = "qword [" + real_a + "]";
+    }
+    if (b.substr(0, 3) == "rbp") {
+        real_b = "qword [" + real_b + "]";
+    }
+    add_instr("cmp " + real_a + ", " + real_b);
 }
 
 // TODO: this needs to be a function that gets called by add and mov, since they're the same.
