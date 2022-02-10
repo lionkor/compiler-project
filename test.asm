@@ -2,6 +2,8 @@ global _start
 
 section .data
 	; externs from dependency "std/print.o"
+	extern length_recursive
+	extern length
 	extern std_print
 	; own globals
 	global main
@@ -18,7 +20,7 @@ section .text
 ; libasm
 %include "asm/lib.asm"
 
-; fn main()->i64 ret
+; fn main()->u64 ret
 main:
     push rbp
     mov rbp, rsp
@@ -27,7 +29,7 @@ main:
     ; setting rbp-8 to debug value
     mov rax, 0xdeadc0de
     mov qword [rbp-8], rax
-    ; rbp-16 = i64 str
+    ; rbp-16 = u64 str
     ; condition of if-statement
     push rax
     mov rax, 0

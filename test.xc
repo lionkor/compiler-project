@@ -1,7 +1,7 @@
 use "std/print";
 
-fn main() -> i64 ret {
-    i64 str;
+fn main() -> u64 ret {
+    u64 str;
     if (0) {
         str = "A";
     } else {

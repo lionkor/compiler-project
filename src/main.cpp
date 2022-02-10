@@ -1,5 +1,6 @@
 #include "ASTParser.h"
 #include "Common.h"
+#include "Type.h"
 
 #include <lk/Logger.h>
 
@@ -23,6 +24,7 @@ public:
     const std::vector<std::unique_ptr<Object>>& dependencies() const;
     const std::string& obj_file() const;
     const std::vector<std::string>& globals() const;
+    bool get_type_by_name(Type& out_type, const std::string& type_name) const;
 
 private:
     bool compile_unit(const std::shared_ptr<AST::Unit>&);
@@ -62,8 +64,9 @@ private:
 
     bool is_identifier_known(const std::string& id);
     size_t get_address_for_identifier(const std::string& id);
+    Type get_type_for_identifier(const std::string& id);
     std::string generate_signature(const std::shared_ptr<AST::FunctionDecl>& func);
-    size_t register_identifier(const std::string& id, size_t size);
+    size_t register_identifier(const std::string& id, Type type);
     size_t make_stack_ptr_for_size(size_t size);
     std::string generate_unique_label();
 
@@ -76,8 +79,11 @@ private:
 
     std::vector<std::string> m_globals;
     size_t m_unique_label_i { 0 };
-    std::vector<std::unique_ptr<Object>> m_dependencies;
+    std::vector<std::unique_ptr<Object>> m_dependencies {};
     std::string m_obj_file;
+
+    std::unordered_set<Type> m_types {};
+    std::unordered_map<std::string, Type> m_identifiers {};
 
     static inline const std::string m_arg_registers[] = { "rdi", "rsi", "rdx", "rcx", "r8", "r9" };
 };
@@ -256,6 +262,7 @@ static std::vector<Token> tokenize(const std::string& source) {
 
 Object::Object(const std::shared_ptr<AST::Unit>& root)
     : m_root(root) {
+    m_types.insert(s_builtin_types.begin(), s_builtin_types.end());
 }
 
 constexpr const char* libasm_decl = R"(
@@ -346,15 +353,15 @@ bool Object::compile(const std::string& original_filename, bool standalone) {
 }
 
 bool Object::is_identifier_known(const std::string& id) {
-    return std::find_if(m_identifier_stack_addr_map.begin(), m_identifier_stack_addr_map.end(),
-               [&](const auto& pair) -> bool {
-                   return pair.first == id;
-               })
-        != m_identifier_stack_addr_map.end();
+    return m_identifiers.contains(id) && m_identifier_stack_addr_map.contains(id);
 }
 
 size_t Object::get_address_for_identifier(const std::string& id) {
     return m_identifier_stack_addr_map.at(id);
+}
+
+Type Object::get_type_for_identifier(const std::string& id) {
+    return m_identifiers.at(id);
 }
 
 std::string Object::generate_signature(const std::shared_ptr<AST::FunctionDecl>& func) {
@@ -375,8 +382,10 @@ std::string Object::generate_signature(const std::shared_ptr<AST::FunctionDecl>&
     return res;
 }
 
-size_t Object::register_identifier(const std::string& id, size_t size) {
-    auto addr = make_stack_ptr_for_size(size);
+size_t Object::register_identifier(const std::string& id, Type type) {
+    lk::log::debug() << "identifier '" << id << "' is type: " << type << std::endl;
+    m_identifiers[id] = type;
+    auto addr = make_stack_ptr_for_size(type.size);
     m_identifier_stack_addr_map[id] = addr;
     return addr;
 }
@@ -397,6 +406,16 @@ std::string Object::generate_unique_label() {
 
 const std::vector<std::string>& Object::globals() const {
     return m_globals;
+}
+
+bool Object::get_type_by_name(Type& out_type, const std::string& type_name) const {
+    auto iter = std::find_if(m_types.begin(), m_types.end(), [&type_name](const Type& type) { return type.name == type_name; });
+    if (iter != m_types.end()) {
+        out_type = *iter;
+        return true;
+    } else {
+        return false;
+    }
 }
 
 const std::string& Object::obj_file() const {
@@ -446,7 +465,12 @@ bool Object::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& dec
     size_t fn_start_index = m_asm_text.size();
     std::string return_value_storage = "0";
     if (decl->result) {
-        auto offset = register_identifier(decl->result->identifier->name, 8);
+        Type result_type;
+        if (!get_type_by_name(result_type, decl->result->type_name->name)) {
+            lk::log::error() << "'" << decl->result->type_name->name << "' is not a known type" << std::endl;
+            return false;
+        }
+        auto offset = register_identifier(decl->result->identifier->name, result_type);
         return_value_storage = "rbp-" + std::to_string(offset);
         add_comment(return_value_storage + " = " + decl->result->identifier->name);
         add_comment("setting " + return_value_storage + " to debug value");
@@ -456,7 +480,12 @@ bool Object::compile_function_decl(const std::shared_ptr<AST::FunctionDecl>& dec
     if (decl->arguments) {
         size_t i = 0;
         for (const auto& arg : decl->arguments->variables) {
-            auto offset = register_identifier(arg->identifier->name, 8);
+            Type var_type;
+            if (!get_type_by_name(var_type, arg->type_name->name)) {
+                lk::log::error() << "'" << arg->type_name->name << "' is not a known type" << std::endl;
+                return false;
+            }
+            auto offset = register_identifier(arg->identifier->name, var_type);
             auto reg = "rbp-" + std::to_string(offset);
             add_comment(reg + " = " + arg->identifier->name);
             add_instr_mov(reg, m_arg_registers[i]);
@@ -557,7 +586,12 @@ bool Object::compile_else_statement(const std::shared_ptr<AST::ElseStatement>& s
 }
 
 bool Object::compile_variable_decl(const AST::VariableDecl* decl) {
-    auto addr = register_identifier(decl->identifier->name, 8);
+    Type var_type;
+    if (!get_type_by_name(var_type, decl->type_name->name)) {
+        lk::log::error() << "type '" << decl->type_name->name << "' for variable '" << decl->identifier->name << "' is not known" << std::endl;
+        return false;
+    }
+    auto addr = register_identifier(decl->identifier->name, var_type);
     add_comment("rbp-" + std::to_string(addr) + " = " + decl->type_name->name + " " + decl->identifier->name);
     return true;
 }
